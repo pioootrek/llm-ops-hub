@@ -1,0 +1,195 @@
+{
+  "$defs": {
+    "paragraphs": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "$id": "backlog-item.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One backlog item. Canonical serialization: UTF-8, 2-space indent, sorted keys, trailing newline. Filename must be <id>.json inside the directory matching <type>.",
+  "properties": {
+    "area": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "created": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^(FEAT|FIX|RWK|SEC)-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "links": {
+      "additionalProperties": false,
+      "properties": {
+        "prs": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "related_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "notes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "text"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "priority": {
+      "enum": [
+        "now",
+        "next",
+        "later"
+      ]
+    },
+    "problem": {
+      "$ref": "#/$defs/paragraphs"
+    },
+    "risk": {
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "level": {
+            "enum": [
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "properties": {
+        "dimensions": {
+          "items": {
+            "enum": [
+              "tenant-isolation",
+              "auth-rbac",
+              "data-migration",
+              "data-exposure",
+              "availability",
+              "external-integration",
+              "ui-only",
+              "ci-release",
+              "legal-compliance",
+              "perf",
+              "process"
+            ]
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "level": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "rollback": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "dimensions"
+      ],
+      "then": {
+        "required": [
+          "level",
+          "dimensions",
+          "rollback"
+        ]
+      },
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "scope": {
+      "$ref": "#/$defs/paragraphs"
+    },
+    "source": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "open",
+        "in-progress",
+        "blocked"
+      ]
+    },
+    "title": {
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+    },
+    "trigger": {
+      "$ref": "#/$defs/paragraphs"
+    },
+    "type": {
+      "enum": [
+        "feature",
+        "fix",
+        "rework",
+        "security"
+      ]
+    },
+    "validation": {
+      "$ref": "#/$defs/paragraphs"
+    },
+    "value": {
+      "$ref": "#/$defs/paragraphs"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "type",
+    "area",
+    "status",
+    "priority",
+    "created",
+    "source",
+    "risk",
+    "problem",
+    "value",
+    "scope",
+    "validation"
+  ],
+  "title": "Backlog item",
+  "type": "object"
+}

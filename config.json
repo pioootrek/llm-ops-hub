@@ -1,0 +1,21 @@
+{
+  "paths": {
+    "cache": "{root}/cache",
+    "mirror": "{root}/mirror.git",
+    "public": "{root}/public",
+    "releases": "{root}/public_releases",
+    "root": "~/winpath-hub"
+  },
+  "project": {
+    "backlog_dir": "docs/backlog",
+    "backlog_ref": "main",
+    "github_repo": "pioootrek/win-path-6",
+    "name": "WinPath",
+    "repo_url": "git@github.com:pioootrek/win-path-6.git"
+  },
+  "schema_version": 1,
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  }
+}

@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${WINPATH_HUB_ROOT:-$HOME/winpath-hub}"
-MIRROR="$ROOT/mirror.git"
-REMOTE="git@github.com:pioootrek/win-path-6.git"
+HUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-mkdir -p "$ROOT/cache" "$ROOT/logs" "$ROOT/public_releases"
-
-if [[ ! -d "$MIRROR" ]]; then
-  git clone --mirror "$REMOTE" "$MIRROR"
-else
-  git --git-dir="$MIRROR" fetch --prune origin '+refs/heads/*:refs/heads/*'
-fi
-
-python3 "$ROOT/bin/build_hub.py"
+python3 "$HUB_DIR/bin/hub.py" sync
+python3 "$HUB_DIR/bin/hub.py" build
