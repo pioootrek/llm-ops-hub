@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${WINPATH_HUB_ROOT:-$HOME/winpath-hub}"
 MIRROR="$ROOT/mirror.git"
 REMOTE="git@github.com:pioootrek/win-path-6.git"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 mkdir -p "$ROOT/cache" "$ROOT/logs" "$ROOT/public_releases"
 
@@ -13,4 +14,4 @@ else
   git --git-dir="$MIRROR" fetch --prune origin '+refs/heads/*:refs/heads/*'
 fi
 
-python3 "$ROOT/bin/build_hub.py"
+python3 "$SCRIPT_DIR/build_hub.py"

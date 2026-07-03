@@ -7,8 +7,9 @@ Wants=network-online.target
 Type=oneshot
 User=pioootrek
 Group=pioootrek
-WorkingDirectory=/home/pioootrek/winpath-hub
-ExecStart=/home/pioootrek/winpath-hub/bin/sync_hub.sh
+Environment=WINPATH_HUB_ROOT=/home/pioootrek/winpath-hub
+WorkingDirectory=/home/pioootrek/winpath-ops-hub
+ExecStart=/home/pioootrek/winpath-ops-hub/bin/sync_hub.sh
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
