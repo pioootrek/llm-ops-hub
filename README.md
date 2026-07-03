@@ -67,6 +67,16 @@ Prose is arrays of paragraphs (diff-friendly). `risk` is mandatory;
 `rollback` is required for `medium`/`high`. `notes` are append-only dated
 entries - the structured replacement for comments.
 
+## Done entries
+
+Completed work is the second record type: `done/DONE-YYYYMMDD-slug.json`,
+validated against `schema/done-entry.schema.json` (project-overridable via
+`done-schema.json`). Closing an item is one commit: delete the item file, add
+a done entry carrying `item_id` (and optionally the full `item_snapshot`),
+run `fmt` + `validate`. Because storage is one flat file per entry, there is
+never a giant done log to archive - grouping (by month, by area) happens in
+the rendered site, not on disk.
+
 ## Quickstart
 
 ### In the monitored project (agents and humans editing the backlog)
@@ -96,8 +106,9 @@ python3 bin/hub.py serve             # optional stdlib static server
 
 `build` validates everything first and **refuses to render an invalid
 backlog** - the previous release stays live. Output: `index.html`
-(dashboard), `backlog.html` (table + item cards), optional `prs.html`, and
-`data/index.json` for agents (items + ref + commit + generated_at).
+(dashboard), `backlog.html` (table + item cards), `done.html` (completed work
+grouped by month), optional `prs.html`, and `data/index.json` for agents
+(items + done + ref + commit + generated_at).
 
 ## Configuration
 
@@ -122,7 +133,7 @@ live WinPath instance and doubles as the reference example.
 ```
 bin/hub.py       the whole tool (fmt / validate / sync / build / serve / self-test)
 bin/sync_hub.sh  sync + build wrapper used by the systemd timer
-schema/          bundled default JSON Schema for items
+schema/          bundled default JSON Schemas (backlog items, done entries)
 templates/       pack for monitored projects: AGENTS.md, CLAUDE.md, config.json
 systemd/         worker units: sync timer/service, LAN-only static HTTP service
 config.json      hub instance config (current deployment + reference example)

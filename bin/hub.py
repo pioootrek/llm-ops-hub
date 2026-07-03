@@ -35,12 +35,15 @@ import jsonschema
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_SCHEMA = TOOL_ROOT / "schema" / "backlog-item.schema.json"
+BUNDLED_DONE_SCHEMA = TOOL_ROOT / "schema" / "done-entry.schema.json"
 
 TYPE_PREFIX = {"feature": "FEAT", "fix": "FIX", "rework": "RWK", "security": "SEC"}
 PRIORITY_ORDER = {"now": 0, "next": 1, "later": 2}
 INDEX_FILE = "index.json"
 PROJECT_SCHEMA_FILE = "schema.json"
+PROJECT_DONE_SCHEMA_FILE = "done-schema.json"
 PROJECT_CONFIG_FILE = "config.json"
+DONE_SUBDIR = "done"
 
 
 class ContractError(Exception):
@@ -190,6 +193,13 @@ def load_schema(source) -> dict[str, Any]:
     return parse_json(str(BUNDLED_SCHEMA), BUNDLED_SCHEMA.read_text(encoding="utf-8"))
 
 
+def load_done_schema(source) -> dict[str, Any]:
+    """Project-owned done-schema.json wins over the bundled default."""
+    if PROJECT_DONE_SCHEMA_FILE in source.list_files():
+        return parse_json(f"{source.label}/{PROJECT_DONE_SCHEMA_FILE}", source.read(PROJECT_DONE_SCHEMA_FILE))
+    return parse_json(str(BUNDLED_DONE_SCHEMA), BUNDLED_DONE_SCHEMA.read_text(encoding="utf-8"))
+
+
 def load_project_config(source) -> dict[str, Any]:
     if PROJECT_CONFIG_FILE in source.list_files():
         data = parse_json(f"{source.label}/{PROJECT_CONFIG_FILE}", source.read(PROJECT_CONFIG_FILE))
@@ -199,8 +209,15 @@ def load_project_config(source) -> dict[str, Any]:
 
 
 def item_files(source) -> list[str]:
-    reserved = {INDEX_FILE, PROJECT_SCHEMA_FILE, PROJECT_CONFIG_FILE}
-    return [p for p in source.list_files() if p not in reserved]
+    reserved = {INDEX_FILE, PROJECT_SCHEMA_FILE, PROJECT_DONE_SCHEMA_FILE, PROJECT_CONFIG_FILE}
+    return [
+        p for p in source.list_files()
+        if p not in reserved and not p.startswith(DONE_SUBDIR + "/")
+    ]
+
+
+def done_files(source) -> list[str]:
+    return [p for p in source.list_files() if p.startswith(DONE_SUBDIR + "/")]
 
 
 def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -251,6 +268,50 @@ def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) 
     return items, errors
 
 
+def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Returns (done entries newest first, error messages)."""
+    validator = jsonschema.Draft202012Validator(schema)
+    errors: list[str] = []
+    entries: list[dict[str, Any]] = []
+    seen_ids: dict[str, str] = {}
+
+    for rel_path in done_files(source):
+        label = f"{source.label}/{rel_path}"
+        try:
+            raw = source.read(rel_path)
+            data = parse_json(label, raw)
+        except ContractError as exc:
+            errors.append(str(exc))
+            continue
+
+        schema_errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+        if schema_errors:
+            for err in schema_errors:
+                where = "/".join(str(p) for p in err.path) or "(root)"
+                errors.append(f"{label}: {where}: {err.message}")
+            continue
+
+        entry_id = data["id"]
+        expected_rel = f"{DONE_SUBDIR}/{entry_id}.json"
+        if rel_path != expected_rel:
+            errors.append(f"{label}: file must be at {expected_rel} (id defines the path)")
+        if entry_id[5:13] != data["date"].replace("-", ""):
+            errors.append(f"{label}: id date part must match date {data['date']}")
+        if entry_id in seen_ids:
+            errors.append(f"{label}: duplicate id {entry_id} (also in {seen_ids[entry_id]})")
+        else:
+            seen_ids[entry_id] = rel_path
+
+        if raw != canonical_json(data):
+            errors.append(f"{label}: not in canonical form (run: hub.py fmt)")
+
+        data["_path"] = rel_path
+        entries.append(data)
+
+    entries.sort(key=lambda e: (e["date"], e["id"]), reverse=True)
+    return entries, errors
+
+
 def build_index(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated_by": "hub.py fmt",
@@ -293,7 +354,7 @@ def _worktree(backlog_dir: str) -> WorktreeSource:
 def cmd_fmt(args: argparse.Namespace) -> int:
     source = _worktree(args.backlog_dir)
     changed = 0
-    for rel_path in item_files(source):
+    for rel_path in item_files(source) + done_files(source):
         label = f"{source.label}/{rel_path}"
         raw = source.read(rel_path)
         formatted = canonical_json(parse_json(label, raw))
@@ -305,6 +366,8 @@ def cmd_fmt(args: argparse.Namespace) -> int:
     schema = load_schema(source)
     project_cfg = load_project_config(source)
     items, errors = validate_items(source, schema, project_cfg)
+    _, done_errors = validate_done_entries(source, load_done_schema(source))
+    errors += done_errors
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -325,13 +388,15 @@ def cmd_validate(args: argparse.Namespace) -> int:
     schema = load_schema(source)
     project_cfg = load_project_config(source)
     items, errors = validate_items(source, schema, project_cfg)
+    done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
+    errors += done_errors
     errors += validate_index(source, items)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         print(f"validate: {len(errors)} error(s)", file=sys.stderr)
         return 2
-    print(f"validate: OK ({len(items)} items)")
+    print(f"validate: OK ({len(items)} items, {len(done_entries)} done entries)")
     return 0
 
 
@@ -388,6 +453,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     schema = load_schema(source)
     project_cfg = load_project_config(source)
     items, errors = validate_items(source, schema, project_cfg)
+    done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
+    errors += done_errors
     errors += validate_index(source, items)
     if errors:
         for error in errors:
@@ -404,7 +471,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if release.exists():
         release = paths["releases"] / f"{stamp}-{os.getpid()}"
 
-    render_site(cfg, items, commit, prs, pr_error, release)
+    render_site(cfg, items, done_entries, commit, prs, pr_error, release)
 
     tmp_link = paths["root"] / "public.next"
     if tmp_link.exists() or tmp_link.is_symlink():
@@ -440,7 +507,11 @@ def paragraphs(values: list[str]) -> str:
 
 
 def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool) -> str:
-    links = [("home", "index.html", "Dashboard"), ("backlog", "backlog.html", "Backlog")]
+    links = [
+        ("home", "index.html", "Dashboard"),
+        ("backlog", "backlog.html", "Backlog"),
+        ("done", "done.html", "Done"),
+    ]
     if has_prs:
         links.append(("prs", "prs.html", "PRs"))
     links.append(("data", "data/index.json", "JSON"))
@@ -524,9 +595,27 @@ def item_detail(item: dict[str, Any]) -> str:
     return card(f"{item['id']} · {item['title']}", body, meta)
 
 
+def done_detail(entry: dict[str, Any]) -> str:
+    body = paragraphs(entry["summary"])
+    body += "<h3>validation</h3>" + paragraphs(entry["validation"])
+    if entry.get("changed"):
+        body += "<h3>changed</h3><ul>" + "".join(f"<li>{h(c)}</li>" for c in entry["changed"]) + "</ul>"
+    pills = []
+    if entry.get("item_id"):
+        pills.append(f"<span class=pill>closes {h(entry['item_id'])}</span>")
+    pills.extend(f"<span class=pill>follow-up {h(f)}</span>" for f in entry.get("followup_ids", []))
+    if pills:
+        body += "<h3>links</h3><p>" + "".join(pills) + "</p>"
+    meta = f"<span class=pill>{h(entry['date'])}</span>"
+    if entry.get("source"):
+        meta += f"<span class=pill>{h(entry['source'])}</span>"
+    return card(entry["title"], body, meta)
+
+
 def render_site(
     cfg: dict[str, Any],
     items: list[dict[str, Any]],
+    done_entries: list[dict[str, Any]],
     commit: str,
     prs: list[dict[str, Any]],
     pr_error: str | None,
@@ -544,6 +633,7 @@ def render_site(
     index_data = {
         "backlog": items,
         "commit": commit,
+        "done": done_entries,
         "generated_at": generated_at,
         "pr_error": pr_error,
         "prs": prs,
@@ -564,9 +654,11 @@ def render_site(
     def pills(counter: dict[str, int]) -> str:
         return "".join(f"<span class=pill>{h(k)}: {v}</span>" for k, v in sorted(counter.items()))
 
+    latest_done = f"latest: {h(done_entries[0]['date'])}" if done_entries else "no entries yet"
     home = [
         card("Backlog", f"<p>{len(items)} open items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p>"),
         card("Risk", f"<p>{high_risk} high-risk item(s).</p>"),
+        card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p>"),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
     if has_prs:
@@ -593,6 +685,21 @@ def render_site(
         + "".join(item_detail(item) for item in items)
     )
     (out / "backlog.html").write_text(page(name, "Backlog", backlog_body, active="backlog", has_prs=has_prs), encoding="utf-8")
+
+    done_body = (
+        "<h1>Done</h1><p class=muted>Completed-work records, newest first. "
+        "Grouping is a render concern - storage stays one file per entry.</p>"
+    )
+    current_month = None
+    for entry in done_entries:
+        month = entry["date"][:7]
+        if month != current_month:
+            done_body += f"<h2>{h(month)}</h2>"
+            current_month = month
+        done_body += done_detail(entry)
+    if not done_entries:
+        done_body += "<p class=muted>No done entries yet.</p>"
+    (out / "done.html").write_text(page(name, "Done", done_body, active="done", has_prs=has_prs), encoding="utf-8")
 
     if has_prs:
         pr_rows = []
@@ -636,6 +743,19 @@ SAMPLE_ITEM = {
     "scope": ["Sample scope paragraph."],
     "validation": ["Sample validation paragraph."],
     "notes": [{"date": "2026-07-03", "text": "Sample note."}],
+}
+
+
+SAMPLE_DONE = {
+    "schema_version": 1,
+    "id": "DONE-20260703-sample-entry",
+    "date": "2026-07-03",
+    "title": "Self-test sample done entry",
+    "summary": ["Sample summary paragraph."],
+    "validation": ["Sample validation evidence."],
+    "changed": ["src/example.py"],
+    "item_id": "FEAT-20260703-sample-item",
+    "followup_ids": ["FIX-20260704-follow-up"],
 }
 
 
@@ -686,6 +806,31 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
 
     index_errors = validate_index(_MemorySource({"feature/FEAT-20260703-sample-item.json": good}), items)
     assert index_errors and "missing" in index_errors[0], "missing index must be reported"
+
+    done_schema = parse_json(str(BUNDLED_DONE_SCHEMA), BUNDLED_DONE_SCHEMA.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(done_schema)
+    good_done = canonical_json(SAMPLE_DONE)
+
+    entries, errs = validate_done_entries(_MemorySource({"done/DONE-20260703-sample-entry.json": good_done}), done_schema)
+    assert not errs, f"valid done entry reported errors: {errs}"
+    assert entries[0]["id"] == "DONE-20260703-sample-entry"
+
+    _, errs = validate_done_entries(_MemorySource({"done/DONE-20260703-wrong-name.json": good_done}), done_schema)
+    assert any("file must be at" in e for e in errs), f"done path rule not enforced: {errs}"
+
+    bad_done = json.loads(good_done)
+    bad_done["date"] = "2026-07-04"
+    _, errs = validate_done_entries(
+        _MemorySource({"done/DONE-20260703-sample-entry.json": canonical_json(bad_done)}), done_schema
+    )
+    assert any("date part" in e for e in errs), f"done id/date rule not enforced: {errs}"
+
+    mixed = _MemorySource({
+        "feature/FEAT-20260703-sample-item.json": good,
+        "done/DONE-20260703-sample-entry.json": good_done,
+    })
+    assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done files must not be treated as items"
+    assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
 
     print("self-test passed")
     return 0
