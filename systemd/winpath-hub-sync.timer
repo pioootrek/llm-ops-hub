@@ -1,0 +1,11 @@
+[Unit]
+Description=Run WinPath LAN Hub sync every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+schema_version: 1
+date: 2026-07-03
+title: Hardened codex-worker for LAN-only hub access
+source: test-seed from current setup session
+summary: >
+  SSH was hardened for user pioootrek, UFW was enabled for home LAN access to
+  SSH and port 8080, and LXD group access was removed from the user.
+changed:
+  - codex-worker sshd drop-in
+  - UFW LAN rules
+  - pioootrek group membership
+validation: >
+  Fresh SSH connection succeeded after hardening; UFW showed active rules for
+  22/tcp and 8080/tcp from 192.168.1.0/24.
+followups:
+  - Reboot codex-worker when convenient to load the updated kernel.

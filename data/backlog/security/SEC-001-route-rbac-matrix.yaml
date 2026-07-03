@@ -1,0 +1,36 @@
+schema_version: 1
+id: SEC-001
+title: Route RBAC matrix hardening for admin and manager surfaces
+type: security
+area: org-access
+status: open
+priority: next
+risk:
+  level: medium
+  dimensions:
+    - auth-rbac
+    - tenant-isolation
+  rollback: Revert the new matrix assertions and keep existing route guards unchanged.
+decision:
+  state: not_required
+source:
+  kind: test-seed
+  refs:
+    - "PR #244 security backlog shape"
+summary: >
+  Add explicit route-level authorization coverage for role-sensitive app areas.
+problem: >
+  Route access can drift when new logged-in surfaces are added without a
+  central matrix proving expected allow and deny paths.
+value: >
+  A route matrix gives agents and humans a concrete safety net before changing
+  org-admin, manager, support, or billing-gated pages.
+scope: >
+  Cover high-risk logged-in routes with positive and negative role cases.
+  Excludes full browser E2E for every route in the first pass.
+validation: >
+  Focused automated route authorization tests with tenant mismatch and role
+  downgrade cases.
+links:
+  prs: []
+  related_ids: []
