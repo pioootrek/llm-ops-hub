@@ -506,7 +506,7 @@ def paragraphs(values: list[str]) -> str:
     return "".join(f"<p>{h(p)}</p>" for p in values)
 
 
-def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool) -> str:
+def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool, css_version: str = "") -> str:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
@@ -525,7 +525,7 @@ def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{h(title)} · {h(project_name)} Backlog Hub</title>
-<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="assets/styles.css{h(css_version)}">
 </head>
 <body>
 <header>
@@ -544,31 +544,75 @@ def card(title: str, content: str, meta: str = "") -> str:
 
 
 CSS = (
-    'body{margin:0;background:#f7f8f5;color:#20231f;font-family:-apple-system,BlinkMacSystemFont,'
-    '"Segoe UI",sans-serif;line-height:1.45}header{position:sticky;top:0;background:#fffffb;'
-    'border-bottom:1px solid #d8ddcf;padding:14px 24px;display:flex;justify-content:space-between;'
-    'gap:16px;align-items:center}header span{display:block;color:#687064;font-size:13px}'
-    'nav{display:flex;gap:8px;flex-wrap:wrap}nav a{color:#29332b;text-decoration:none;'
-    'border:1px solid #cbd4c5;padding:6px 10px;border-radius:6px;background:#fff}'
-    'nav a.active{background:#18392b;color:#fff;border-color:#18392b}'
-    'main{max-width:1180px;margin:0 auto;padding:24px}'
+    ':root{color-scheme:light;--background:#fafafa;--foreground:#09090b;--card:#fff;--muted:#71717a;'
+    '--muted-bg:#f4f4f5;--border:#e4e4e7;--ring:#18181b;--accent:#f4f4f5;--accent-fg:#18181b;'
+    '--radius:8px;--shadow:0 1px 2px rgba(24,24,27,.04)}*{box-sizing:border-box}'
+    'body{margin:0;background:var(--background);color:var(--foreground);font-family:-apple-system,BlinkMacSystemFont,'
+    '"Segoe UI",sans-serif;line-height:1.45;-webkit-font-smoothing:antialiased}'
+    'header{position:sticky;top:0;z-index:20;background:rgba(250,250,250,.92);backdrop-filter:saturate(180%) blur(12px);'
+    'border-bottom:1px solid var(--border);padding:12px 24px;display:flex;justify-content:space-between;'
+    'gap:16px;align-items:center}header strong{font-size:14px;font-weight:650}header span{display:block;color:var(--muted);font-size:12px}'
+    'nav{display:flex;gap:6px;flex-wrap:wrap}nav a{color:#27272a;text-decoration:none;border:1px solid transparent;'
+    'padding:6px 10px;border-radius:6px;background:transparent;font-size:13px;font-weight:500}'
+    'nav a:hover{background:var(--accent)}nav a.active{background:var(--foreground);color:#fff;border-color:var(--foreground)}'
+    'main{max-width:1320px;margin:0 auto;padding:24px}h1{font-size:28px;line-height:1.15;margin:0;font-weight:700}'
+    '.page-heading{display:flex;justify-content:space-between;gap:18px;align-items:flex-end;margin:2px 0 18px}'
+    '.page-heading p{margin:6px 0 0;max-width:760px}.heading-meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}'
     '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}'
-    '.card{background:#fff;border:1px solid #dce2d5;border-radius:8px;padding:16px;margin:0 0 14px}'
-    '.card h2{font-size:18px;margin:0 0 8px}.meta,.muted{color:#667064;font-size:13px}'
-    '.pill{display:inline-block;border:1px solid #c7d0c0;background:#f3f6ef;border-radius:999px;'
-    'padding:2px 8px;margin:2px;font-size:12px}'
-    '.risk-high{border-color:#b04444;background:#fff0f0}'
-    '.risk-medium{border-color:#b88728;background:#fff8e8}'
-    '.risk-low{border-color:#4d8565;background:#edf8f1}'
-    'table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dce2d5}'
-    'th,td{padding:9px 10px;border-bottom:1px solid #e6eadf;text-align:left;vertical-align:top}'
-    'th{background:#eef2e8}a{color:#145c42}'
-    '.warn{border-left:4px solid #b88728;padding-left:12px;background:#fff8e8}'
-    'h3{font-size:14px;margin:14px 0 4px;text-transform:uppercase;letter-spacing:.04em;color:#4c584e}'
+    '.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:0 0 14px;box-shadow:var(--shadow)}'
+    '.card h2{font-size:17px;line-height:1.28;margin:0 0 10px;font-weight:650}.card p{margin:9px 0}'
+    '.meta,.muted{color:var(--muted);font-size:13px}code{border:1px solid var(--border);border-radius:6px;background:var(--muted-bg);'
+    'padding:1px 5px;font-size:.92em}.pill{display:inline-flex;align-items:center;border:1px solid var(--border);background:#fff;'
+    'border-radius:6px;padding:2px 7px;margin:2px;font-size:12px;font-weight:500;line-height:1.45}'
+    '.button{display:inline-flex;align-items:center;justify-content:center;height:32px;border:1px solid var(--border);'
+    'border-radius:6px;background:#fff;color:#18181b;padding:0 10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer}'
+    '.button:hover{background:#f4f4f5}.button.primary{background:#18181b;color:#fff;border-color:#18181b}.button:focus-visible,'
+    '.control input:focus,.control select:focus{outline:2px solid var(--ring);outline-offset:2px}'
+    '.toolbar{display:grid;grid-template-columns:minmax(220px,1.6fr) repeat(4,minmax(112px,1fr)) minmax(150px,1.15fr) 84px auto;'
+    'gap:8px;align-items:end;margin:0 0 12px}.control{display:grid;gap:4px}.control label{color:#52525b;font-size:11px;font-weight:600}'
+    '.control input,.control select{height:32px;width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;'
+    'color:#18181b;padding:0 8px;font:inherit;font-size:13px}.toolbar-actions{display:flex;gap:6px;align-items:end;justify-content:flex-end}'
+    '.risk-high{border-color:#fecaca;background:#fef2f2;color:#991b1b}'
+    '.risk-medium{border-color:#fde68a;background:#fffbeb;color:#92400e}'
+    '.risk-low{border-color:#bbf7d0;background:#f0fdf4;color:#166534}'
+    '.backlog-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(380px,.88fr);gap:16px;align-items:start}'
+    '.backlog-shell.details-closed .backlog-layout{grid-template-columns:1fr}.backlog-shell.details-closed .detail-pane{display:none}'
+    '.backlog-list,.detail-pane{min-width:0}.backlog-list{border:1px solid var(--border);border-radius:var(--radius);'
+    'background:var(--card);box-shadow:var(--shadow);overflow:auto}.detail-pane{position:sticky;top:78px}'
+    '.detail-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 8px}.detail-header h2{font-size:13px;margin:0}'
+    '.detail-pane .empty{border:1px dashed var(--border);border-radius:var(--radius);padding:18px;background:var(--card)}'
+    '.item-row{cursor:pointer;outline:none}.item-row[hidden]{display:none!important}.item-row:hover{background:#f8fafc}.item-row.active{background:#f4f4f5}'
+    '.item-row:focus-visible{box-shadow:inset 0 0 0 2px var(--ring)}.item-row.active td:first-child{box-shadow:inset 3px 0 0 var(--ring)}'
+    '.item-title-link{color:#18181b;text-decoration:none;font-weight:500}.item-title-link:hover{text-decoration:underline;text-underline-offset:3px}'
+    '.item-detail{scroll-margin-top:92px}.item-detail h3{border-top:1px solid var(--border);padding-top:12px}'
+    '.js .item-detail{display:none}.js .item-detail.active{display:block}'
+    'table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:transparent}'
+    'th,td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}'
+    '.risk-col,.risk-cell{white-space:nowrap;text-align:right;padding-left:4px;padding-right:8px}'
+    '.risk-cell .pill{margin:0;padding:1px 6px}'
+    'th{position:sticky;top:0;z-index:1;background:#fafafa;color:#52525b;font-size:12px;font-weight:600}'
+    'tbody tr:last-child td{border-bottom:0}a{color:#0f766e}'
+    '.backlog-shell:not(.details-closed) table,.backlog-shell:not(.details-closed) tbody{display:block}'
+    '.backlog-shell:not(.details-closed) thead,.backlog-shell:not(.details-closed) colgroup{display:none}'
+    '.backlog-shell:not(.details-closed) .item-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));'
+    'gap:5px 10px;padding:12px;border-bottom:1px solid var(--border)}'
+    '.backlog-shell:not(.details-closed) .item-row.active{box-shadow:inset 3px 0 0 var(--ring)}'
+    '.backlog-shell:not(.details-closed) .item-row td{display:block;min-width:0;border-bottom:0;padding:0;font-size:13px}'
+    '.backlog-shell:not(.details-closed) .item-row td:nth-child(2){grid-column:1/-1;order:1;font-size:14px;line-height:1.35}'
+    '.backlog-shell:not(.details-closed) .item-row td:nth-child(1){grid-column:1/-1;order:2;color:var(--muted)}'
+    '.backlog-shell:not(.details-closed) .item-row td:first-child{box-shadow:none}.backlog-shell:not(.details-closed) .item-row td:nth-child(1) strong{display:block;font-size:12px}'
+    '.backlog-shell:not(.details-closed) .item-row td:nth-child(n+3){order:3;padding-top:4px;color:#52525b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    '.backlog-shell:not(.details-closed) .risk-cell{text-align:right}.backlog-shell:not(.details-closed) .muted{font-size:12px}'
+    '.empty-state{padding:18px;border-top:1px solid var(--border);background:#fff;color:var(--muted);font-size:13px}'
+    '.warn{border-left:4px solid #f59e0b;padding:10px 12px;background:#fffbeb;border-radius:0 8px 8px 0}'
+    'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:#52525b;font-weight:650}'
+    '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
+    '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
+    '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}}'
 )
 
 
-def item_detail(item: dict[str, Any]) -> str:
+def item_detail(item: dict[str, Any], *, active: bool = False) -> str:
     body = paragraphs(item["problem"])
     for section in ["value", "scope", "validation", "trigger"]:
         if item.get(section):
@@ -592,7 +636,28 @@ def item_detail(item: dict[str, Any]) -> str:
     meta = " ".join(
         f"<span class=pill>{h(item[key])}</span>" for key in ["type", "area", "priority", "status", "created"]
     )
-    return card(f"{item['id']} · {item['title']}", body, meta)
+    active_class = " active" if active else ""
+    return (
+        f'<article id="{h(item["id"])}" class="card item-detail{active_class}" data-item-id="{h(item["id"])}">'
+        f"<h2>{h(item['id'])} · {h(item['title'])}</h2><div class=\"meta\">{meta}</div>{body}</article>"
+    )
+
+
+def done_search_text(entry: dict[str, Any]) -> str:
+    values = [
+        entry["id"],
+        entry["date"],
+        entry["title"],
+        *entry["summary"],
+        *entry["validation"],
+        *entry.get("changed", []),
+    ]
+    if entry.get("item_id"):
+        values.append(entry["item_id"])
+    values.extend(entry.get("followup_ids", []))
+    if entry.get("source"):
+        values.append(entry["source"])
+    return " ".join(values).lower()
 
 
 def done_detail(entry: dict[str, Any]) -> str:
@@ -609,7 +674,10 @@ def done_detail(entry: dict[str, Any]) -> str:
     meta = f"<span class=pill>{h(entry['date'])}</span>"
     if entry.get("source"):
         meta += f"<span class=pill>{h(entry['source'])}</span>"
-    return card(entry["title"], body, meta)
+    return (
+        f'<article class="card done-entry" data-done-search="{h(done_search_text(entry))}">'
+        f"<h2>{h(entry['title'])}</h2><div class=\"meta\">{meta}</div>{body}</article>"
+    )
 
 
 def render_site(
@@ -630,6 +698,7 @@ def render_site(
     (out / "assets/styles.css").write_text(CSS, encoding="utf-8")
 
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    css_version = "?v=" + generated_at.replace("-", "").replace(":", "").replace("+", "")
     index_data = {
         "backlog": items,
         "commit": commit,
@@ -664,42 +733,307 @@ def render_site(
     if has_prs:
         home.insert(2, card("Open PRs", f"<p>{len(prs)} open pull requests.</p>" + (f"<p class=warn>{h(pr_error)}</p>" if pr_error else "")))
     (out / "index.html").write_text(
-        page(name, "Dashboard", f"<section class=grid>{''.join(home)}</section>", active="home", has_prs=has_prs),
+        page(
+            name,
+            "Dashboard",
+            f"<section class=grid>{''.join(home)}</section>",
+            active="home",
+            has_prs=has_prs,
+            css_version=css_version,
+        ),
         encoding="utf-8",
     )
 
     rows = []
-    for item in items:
+    for idx, item in enumerate(items):
         risk_class = f"risk-{h(item['risk']['level'])}"
-        rows.append(
-            f"<tr><td><strong>{h(item['id'])}</strong><div class=muted>{h(item['_path'])}</div></td>"
-            f"<td>{h(item['title'])}</td><td>{h(item['type'])}</td><td>{h(item['area'])}</td>"
-            f"<td>{h(item['priority'])}</td><td>{h(item['status'])}</td>"
-            f"<td><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
+        active_class = " active" if idx == 0 else ""
+        search_text = " ".join(
+            [
+                item["id"],
+                item["title"],
+                item["type"],
+                item["area"],
+                item["priority"],
+                item["status"],
+                item["risk"]["level"],
+                item["_path"],
+            ]
         )
-    backlog_body = (
-        f"<h1>Backlog</h1><p class=muted>Repo-canonical items read at <code>{h(project['backlog_ref'])}</code>"
-        f" @ <code>{h(commit[:10])}</code>. Edits go through the project repo, not the hub.</p>"
-        "<table><thead><tr><th>ID</th><th>Title</th><th>Type</th><th>Area</th><th>Priority</th>"
-        "<th>Status</th><th>Risk</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
-        + "".join(item_detail(item) for item in items)
+        rows.append(
+            f"<tr class=\"item-row{active_class}\" data-item-id=\"{h(item['id'])}\" data-order=\"{idx}\""
+            f" data-title=\"{h(item['title'].lower())}\" data-type=\"{h(item['type'])}\""
+            f" data-area=\"{h(item['area'])}\" data-priority=\"{h(item['priority'])}\""
+            f" data-status=\"{h(item['status'])}\" data-risk=\"{h(item['risk']['level'])}\""
+            f" data-created=\"{h(item['created'])}\" data-search=\"{h(search_text.lower())}\" tabindex=\"0\">"
+            f"<td><strong><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['id'])}</a></strong>"
+            f"<div class=muted>{h(item['_path'])}</div></td>"
+            f"<td><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['title'])}</a></td>"
+            f"<td>{h(item['type'])}</td><td>{h(item['area'])}</td>"
+            f"<td>{h(item['priority'])}</td><td>{h(item['status'])}</td>"
+            f"<td class=risk-cell><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
+        )
+    detail_cards = "".join(item_detail(item, active=idx == 0) for idx, item in enumerate(items))
+    detail_pane = (
+        '<div class=detail-header><h2>Details</h2><button class=button id=close-details type=button>Close</button></div>'
+        + (detail_cards or '<div class="empty muted">No open backlog items.</div>')
     )
-    (out / "backlog.html").write_text(page(name, "Backlog", backlog_body, active="backlog", has_prs=has_prs), encoding="utf-8")
+
+    def options(values: list[str], label: str = "All") -> str:
+        return f'<option value="">{h(label)}</option>' + "".join(
+            f'<option value="{h(value)}">{h(value)}</option>' for value in values
+        )
+
+    type_options = options(sorted({item["type"] for item in items}))
+    area_options = options(sorted({item["area"] for item in items}))
+    priority_options = options(["now", "next", "later"])
+    status_options = options(["open", "in-progress", "blocked"])
+    risk_options = options(["high", "medium", "low"])
+    backlog_script = """
+<script>
+document.documentElement.classList.add("js");
+(function () {
+  const shell = document.querySelector(".backlog-shell");
+  const form = document.getElementById("backlog-controls");
+  const tbody = document.querySelector(".backlog-list tbody");
+  const rows = Array.from(document.querySelectorAll(".item-row"));
+  const details = Array.from(document.querySelectorAll(".item-detail"));
+  const emptyState = document.getElementById("empty-filter-state");
+  const closeDetails = document.getElementById("close-details");
+  const viewToggle = document.getElementById("toggle-details");
+  const clearFilters = document.getElementById("clear-filters");
+  const controls = {
+    query: document.getElementById("filter-query"),
+    type: document.getElementById("filter-type"),
+    area: document.getElementById("filter-area"),
+    priority: document.getElementById("filter-priority"),
+    status: document.getElementById("filter-status"),
+    risk: document.getElementById("filter-risk"),
+    sort: document.getElementById("sort-by"),
+    dir: document.getElementById("sort-dir"),
+  };
+  const priorityRank = { now: 0, next: 1, later: 2 };
+  const riskRank = { high: 0, medium: 1, low: 2 };
+  let detailsOpen = true;
+  if (!rows.length || !details.length || !shell || !tbody) return;
+  form?.addEventListener("submit", (event) => event.preventDefault());
+
+  function clearActive(updateHash) {
+    rows.forEach((row) => {
+      row.classList.remove("active");
+      row.setAttribute("aria-selected", "false");
+    });
+    details.forEach((detail) => detail.classList.remove("active"));
+    if (updateHash) history.replaceState(null, "", location.pathname);
+  }
+
+  function setDetailsOpen(open) {
+    detailsOpen = open;
+    shell.classList.toggle("details-closed", !open);
+    if (viewToggle) viewToggle.textContent = open ? "List" : "Details";
+    if (!open) clearActive(true);
+  }
+
+  function showDetail(id, updateHash) {
+    setDetailsOpen(true);
+    rows.forEach((row) => {
+      const selected = row.dataset.itemId === id;
+      row.classList.toggle("active", selected);
+      row.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    details.forEach((detail) => detail.classList.toggle("active", detail.dataset.itemId === id));
+    if (updateHash) history.replaceState(null, "", "#" + encodeURIComponent(id));
+  }
+
+  function rowValue(row, key) {
+    if (key === "priority") return priorityRank[row.dataset.priority] ?? 99;
+    if (key === "risk") return riskRank[row.dataset.risk] ?? 99;
+    if (key === "order") return Number(row.dataset.order);
+    return row.dataset[key] || "";
+  }
+
+  function matchesFilters(row) {
+    const query = (controls.query?.value || "").trim().toLowerCase();
+    return (!query || row.dataset.search.includes(query))
+      && (!controls.type?.value || row.dataset.type === controls.type.value)
+      && (!controls.area?.value || row.dataset.area === controls.area.value)
+      && (!controls.priority?.value || row.dataset.priority === controls.priority.value)
+      && (!controls.status?.value || row.dataset.status === controls.status.value)
+      && (!controls.risk?.value || row.dataset.risk === controls.risk.value);
+  }
+
+  function applyListState() {
+    const sortKey = controls.sort?.value || "order";
+    const sortDir = controls.dir?.value === "desc" ? -1 : 1;
+    const sortedRows = rows.slice().sort((a, b) => {
+      const aValue = rowValue(a, sortKey);
+      const bValue = rowValue(b, sortKey);
+      if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * sortDir;
+      return String(aValue).localeCompare(String(bValue), undefined, { numeric: true }) * sortDir;
+    });
+    sortedRows.forEach((row) => tbody.appendChild(row));
+    const visibleRows = [];
+    rows.forEach((row) => {
+      const visible = matchesFilters(row);
+      row.hidden = !visible;
+      if (visible) visibleRows.push(row);
+    });
+    if (emptyState) emptyState.hidden = visibleRows.length > 0;
+    const active = rows.find((row) => row.classList.contains("active") && !row.hidden);
+    if (detailsOpen && !active) {
+      if (visibleRows[0]) showDetail(visibleRows[0].dataset.itemId, false);
+      else clearActive(false);
+    }
+  }
+
+  rows.forEach((row) => {
+    row.addEventListener("click", () => showDetail(row.dataset.itemId, true));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        showDetail(row.dataset.itemId, true);
+      }
+    });
+  });
+
+  Object.values(controls).forEach((control) => control?.addEventListener("input", applyListState));
+  Object.values(controls).forEach((control) => control?.addEventListener("change", applyListState));
+  closeDetails?.addEventListener("click", () => setDetailsOpen(false));
+  viewToggle?.addEventListener("click", () => {
+    if (detailsOpen) {
+      setDetailsOpen(false);
+      return;
+    }
+    const requested = decodeURIComponent(location.hash.slice(1));
+    const requestedRow = rows.find((row) => !row.hidden && row.dataset.itemId === requested);
+    const firstVisible = rows.find((row) => !row.hidden);
+    if (requestedRow || firstVisible) showDetail((requestedRow || firstVisible).dataset.itemId, true);
+  });
+  clearFilters?.addEventListener("click", () => {
+    ["query", "type", "area", "priority", "status", "risk"].forEach((key) => {
+      if (controls[key]) controls[key].value = "";
+    });
+    if (controls.sort) controls.sort.value = "order";
+    if (controls.dir) controls.dir.value = "asc";
+    applyListState();
+  });
+
+  function showFromHash() {
+    const requested = decodeURIComponent(location.hash.slice(1));
+    const requestedRow = rows.find((row) => !row.hidden && row.dataset.itemId === requested);
+    const firstVisible = rows.find((row) => !row.hidden);
+    if (requestedRow || firstVisible) showDetail((requestedRow || firstVisible).dataset.itemId, false);
+  }
+
+  window.addEventListener("hashchange", showFromHash);
+  applyListState();
+  if (location.hash) showFromHash();
+  else showDetail(rows.find((row) => !row.hidden)?.dataset.itemId || details[0].dataset.itemId, false);
+})();
+</script>
+"""
+    backlog_body = (
+        '<div class=page-heading><div>'
+        f"<h1>Backlog</h1><p class=muted>Repo-canonical items read at <code>{h(project['backlog_ref'])}</code>"
+        f" @ <code>{h(commit[:10])}</code>. Edits go through the project repo, not the hub.</p></div>"
+        f"<div class=heading-meta><span class=pill>{len(items)} open</span>"
+        f"<span class=pill>{h(project['backlog_ref'])}</span><span class=pill>{h(commit[:10])}</span></div></div>"
+        "<section class=backlog-shell>"
+        "<form class=toolbar id=backlog-controls>"
+        '<div class=control><label for=filter-query>Search</label><input id=filter-query type=search autocomplete=off></div>'
+        f'<div class=control><label for=filter-type>Type</label><select id=filter-type>{type_options}</select></div>'
+        f'<div class=control><label for=filter-area>Area</label><select id=filter-area>{area_options}</select></div>'
+        f'<div class=control><label for=filter-priority>Priority</label><select id=filter-priority>{priority_options}</select></div>'
+        f'<div class=control><label for=filter-status>Status</label><select id=filter-status>{status_options}</select></div>'
+        f'<div class=control><label for=filter-risk>Risk</label><select id=filter-risk>{risk_options}</select></div>'
+        '<div class=control><label for=sort-by>Sort</label><select id=sort-by>'
+        '<option value=order>Default</option><option value=priority>Priority</option><option value=risk>Risk</option>'
+        '<option value=status>Status</option><option value=type>Type</option><option value=area>Area</option>'
+        '<option value=created>Created</option><option value=title>Title</option></select></div>'
+        '<div class=control><label for=sort-dir>Dir</label><select id=sort-dir>'
+        '<option value=asc>Asc</option><option value=desc>Desc</option></select></div>'
+        '<div class=toolbar-actions><button class=button id=clear-filters type=button>Reset</button>'
+        '<button class="button primary" id=toggle-details type=button>List</button></div></form>'
+        "<section class=backlog-layout><div class=backlog-list>"
+        "<table><colgroup><col style=\"width:22%\"><col style=\"width:28%\"><col style=\"width:11%\">"
+        "<col style=\"width:16%\"><col style=\"width:9%\"><col style=\"width:8%\"><col style=\"width:6%\"></colgroup>"
+        "<thead><tr><th>ID</th><th>Title</th><th>Type</th><th>Area</th><th>Priority</th>"
+        "<th>Status</th><th class=risk-col>Risk</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        '<div class=empty-state id=empty-filter-state hidden>No matching backlog items.</div></div>'
+        f"<aside class=detail-pane>{detail_pane}</aside></section></section>"
+        + backlog_script
+    )
+    (out / "backlog.html").write_text(
+        page(name, "Backlog", backlog_body, active="backlog", has_prs=has_prs, css_version=css_version),
+        encoding="utf-8",
+    )
 
     done_body = (
         "<h1>Done</h1><p class=muted>Completed-work records, newest first. "
         "Grouping is a render concern - storage stays one file per entry.</p>"
+        "<form class=toolbar id=done-controls>"
+        '<div class=control><label for=done-search>Search</label><input id=done-search type=search autocomplete=off></div>'
+        '<div class=toolbar-actions><button class=button id=clear-done-search type=button>Reset</button></div></form>'
+        '<div class=empty-state id=done-empty-state hidden>No matching done entries.</div>'
     )
     current_month = None
     for entry in done_entries:
         month = entry["date"][:7]
         if month != current_month:
-            done_body += f"<h2>{h(month)}</h2>"
+            done_body += f'<h2 class=done-month data-month="{h(month)}">{h(month)}</h2>'
             current_month = month
         done_body += done_detail(entry)
     if not done_entries:
         done_body += "<p class=muted>No done entries yet.</p>"
-    (out / "done.html").write_text(page(name, "Done", done_body, active="done", has_prs=has_prs), encoding="utf-8")
+    done_body += """
+<script>
+document.documentElement.classList.add("js");
+(function () {
+  const form = document.getElementById("done-controls");
+  const search = document.getElementById("done-search");
+  const reset = document.getElementById("clear-done-search");
+  const entries = Array.from(document.querySelectorAll(".done-entry"));
+  const months = Array.from(document.querySelectorAll(".done-month"));
+  const empty = document.getElementById("done-empty-state");
+  if (!search || !entries.length) return;
+
+  function applyDoneSearch() {
+    const query = search.value.trim().toLowerCase();
+    let visibleCount = 0;
+    entries.forEach((entry) => {
+      const visible = !query || entry.dataset.doneSearch.includes(query);
+      entry.hidden = !visible;
+      if (visible) visibleCount += 1;
+    });
+    months.forEach((month) => {
+      let sibling = month.nextElementSibling;
+      let hasVisibleEntry = false;
+      while (sibling && !sibling.classList.contains("done-month")) {
+        if (sibling.classList.contains("done-entry") && !sibling.hidden) {
+          hasVisibleEntry = true;
+          break;
+        }
+        sibling = sibling.nextElementSibling;
+      }
+      month.hidden = !hasVisibleEntry;
+    });
+    if (empty) empty.hidden = visibleCount > 0;
+  }
+
+  form?.addEventListener("submit", (event) => event.preventDefault());
+  search.addEventListener("input", applyDoneSearch);
+  reset?.addEventListener("click", () => {
+    search.value = "";
+    applyDoneSearch();
+  });
+  applyDoneSearch();
+})();
+</script>
+"""
+    (out / "done.html").write_text(
+        page(name, "Done", done_body, active="done", has_prs=has_prs, css_version=css_version),
+        encoding="utf-8",
+    )
 
     if has_prs:
         pr_rows = []
@@ -717,7 +1051,10 @@ def render_site(
             "<table><thead><tr><th>PR</th><th>Title</th><th>Branch</th><th>State</th><th>Updated</th></tr></thead>"
             "<tbody>" + "".join(pr_rows) + "</tbody></table>"
         )
-        (out / "prs.html").write_text(page(name, "PRs", pr_body, active="prs", has_prs=has_prs), encoding="utf-8")
+        (out / "prs.html").write_text(
+            page(name, "PRs", pr_body, active="prs", has_prs=has_prs, css_version=css_version),
+            encoding="utf-8",
+        )
 
 
 # ---------------------------------------------------------------------------
