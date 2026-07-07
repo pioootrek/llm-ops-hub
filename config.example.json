@@ -8,7 +8,7 @@
   },
   "project": {
     "backlog_dir": "docs/backlog",
-    "backlog_ref": "main",
+    "backlog_ref": "staging",
     "github_repo": "pioootrek/win-path-6",
     "name": "WinPath",
     "repo_url": "git@github.com:pioootrek/win-path-6.git"
