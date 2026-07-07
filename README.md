@@ -114,8 +114,9 @@ grouped by month), optional `prs.html`, and `data/index.json` for agents
 
 Hub instance config is JSON, resolved from `--config`, then the
 `BACKLOG_HUB_CONFIG` env var, then `config.json` next to the tool, then
-`~/winpath-hub/config.json`. This repo's [config.json](config.json) is the
-live WinPath instance and doubles as the reference example.
+`~/winpath-hub/config.json`. This repo's
+[config.example.json](config.example.json) is the reference example; copy it
+to `config.json` for a local or deployment-specific instance.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
@@ -136,7 +137,8 @@ bin/sync_hub.sh  sync + build wrapper used by the systemd timer
 schema/          bundled default JSON Schemas (backlog items, done entries)
 templates/       pack for monitored projects: AGENTS.md, CLAUDE.md, config.json
 systemd/         worker units: sync timer/service, LAN-only static HTTP service
-config.json      hub instance config (current deployment + reference example)
+config.example.json
+                 reference hub instance config; local config.json is ignored
 AGENTS.md        rulebook for changing this codebase (single source of truth)
 ```
 

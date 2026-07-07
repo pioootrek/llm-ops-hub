@@ -43,8 +43,8 @@ templates/       <- the pack dropped into a monitored project's backlog dir:
                     AGENTS.md (agent operating guide), CLAUDE.md (include),
                     example project config.json
 systemd/         <- worker units: sync timer/service and LAN-only static HTTP
-config.json      <- hub instance config for the current deployment (WinPath);
-                    doubles as the reference example
+config.example.json
+                 <- reference hub instance config; local config.json is ignored
 ```
 
 Runtime state (`mirror.git/`, `cache/`, `public*`, `.venv/`) is gitignored
@@ -92,7 +92,7 @@ and must stay out of commits.
 - Keep `bin/hub.py` a single file until a real second consumer forces a
   split; keep diffs small and reviewable.
 - Config knobs are documented in `README.md`; when adding one, update the
-  README table, the example `config.json`, and `_resolve_hub_config()`
+  README table, the example `config.example.json`, and `_resolve_hub_config()`
   defaults together.
 
 ## Security posture

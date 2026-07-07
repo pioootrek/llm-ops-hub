@@ -14,6 +14,7 @@ public_releases/
 .config/
 .env
 .env.*
+config.json
 
 # Local dev
 .venv/
