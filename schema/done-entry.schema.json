@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "paragraphs": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "$id": "done-entry.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One completed-work record. Canonical serialization: UTF-8, 2-space indent, sorted keys, trailing newline. Filename must be done/<id>.json and the id date part must match the date field.",
+  "properties": {
+    "changed": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "date": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    },
+    "followup_ids": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "id": {
+      "pattern": "^DONE-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "item_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "item_snapshot": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "summary": {
+      "$ref": "#/$defs/paragraphs"
+    },
+    "title": {
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+    },
+    "validation": {
+      "$ref": "#/$defs/paragraphs"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "date",
+    "title",
+    "summary",
+    "validation"
+  ],
+  "title": "Done entry",
+  "type": "object"
+}

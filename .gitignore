@@ -14,3 +14,7 @@ public_releases/
 .config/
 .env
 .env.*
+
+# Local dev
+.venv/
+config.local.json
