@@ -81,6 +81,20 @@ run `fmt` + `validate`. Because storage is one flat file per entry, there is
 never a giant done log to archive - grouping (by month, by area) happens in
 the rendered site, not on disk.
 
+## Agent notes
+
+The third record type is memory for the agents themselves:
+`notes/NOTE-YYYYMMDD-slug.json`. When an agent runs an audit, finds a bug in
+passing, or reverse-engineers a gotcha, it persists the finding as a note so
+the knowledge survives context compaction and is shared across sessions and
+across different models. Only a small envelope is fixed (id, title, created,
+author, status `active|archived`, body); **`body` accepts any JSON and extra
+top-level fields are allowed** - each agent structures its memory however it
+wants (bundled schema: `schema/note.schema.json`, project-overridable via
+`note-schema.json`). Notes serve the LLM, not the human: the hub renders
+them on a `notes.html` page where humans can browse, full-text search, and -
+via the feedback loop - archive or delete them, nothing more.
+
 ## Human feedback
 
 The hub is read-only, but when `project.github_repo` is set, each rendered
@@ -112,7 +126,7 @@ Then, inside the project repo:
 
 ```bash
 mkdir -p docs/backlog/feature docs/backlog/fix docs/backlog/rework \
-         docs/backlog/security docs/backlog/done
+         docs/backlog/security docs/backlog/done docs/backlog/notes
 cp ~/tools/backlog-hub/templates/AGENTS.md \
    ~/tools/backlog-hub/templates/CLAUDE.md \
    ~/tools/backlog-hub/templates/config.json docs/backlog/
@@ -155,6 +169,10 @@ closing backlog items. The short version:
   human-authored notes (`"author": "human:..."`) as direction.
 - When you finish work, close the loop in one commit: delete the item file
   and add a `done/` entry (see the guide).
+- Durable findings (audit results, bugs spotted in passing, gotchas) belong
+  in `docs/backlog/notes/` as agent notes - shared memory across sessions
+  and models, any structure you like inside the envelope. Scan active notes
+  before starting non-trivial work; persist what matters before compacting.
 - Open GitHub issues labeled `backlog-feedback` are human instructions for
   the backlog - apply them as described in the guide, then close them.
 ```
@@ -197,8 +215,10 @@ prefilled issue links.
 `build` validates everything first and **refuses to render an invalid
 backlog** - the previous release stays live. Output: `index.html` (dashboard,
 including open feedback issues), `backlog.html` (table + item cards),
-`done.html` (completed work grouped by month), and `data/index.json` for
-agents (items + done + feedback issues + ref + commit + generated_at).
+`notes.html` (agent notes: browse/search, archive/delete via feedback
+issues), `done.html` (completed work grouped by month), and
+`data/index.json` for agents (items + done + notes + feedback issues + ref +
+commit + generated_at).
 
 ## Configuration
 
@@ -225,7 +245,7 @@ to `config.json` for a local or deployment-specific instance.
 ```
 bin/hub.py       the whole tool (fmt / validate / sync / build / serve / self-test)
 bin/sync_hub.sh  sync + build wrapper used by the systemd timer
-schema/          bundled default JSON Schemas (backlog items, done entries)
+schema/          bundled default JSON Schemas (backlog items, done entries, agent notes)
 templates/       pack for monitored projects: AGENTS.md, CLAUDE.md, config.json
 systemd/         worker units: sync timer/service, LAN-only static HTTP service
 config.example.json

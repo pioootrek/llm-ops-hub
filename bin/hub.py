@@ -38,14 +38,17 @@ import jsonschema
 TOOL_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_SCHEMA = TOOL_ROOT / "schema" / "backlog-item.schema.json"
 BUNDLED_DONE_SCHEMA = TOOL_ROOT / "schema" / "done-entry.schema.json"
+BUNDLED_NOTE_SCHEMA = TOOL_ROOT / "schema" / "note.schema.json"
 
 TYPE_PREFIX = {"feature": "FEAT", "fix": "FIX", "rework": "RWK", "security": "SEC"}
 PRIORITY_ORDER = {"now": 0, "next": 1, "later": 2}
 INDEX_FILE = "index.json"
 PROJECT_SCHEMA_FILE = "schema.json"
 PROJECT_DONE_SCHEMA_FILE = "done-schema.json"
+PROJECT_NOTE_SCHEMA_FILE = "note-schema.json"
 PROJECT_CONFIG_FILE = "config.json"
 DONE_SUBDIR = "done"
+NOTES_SUBDIR = "notes"
 
 
 class ContractError(Exception):
@@ -206,6 +209,13 @@ def load_done_schema(source) -> dict[str, Any]:
     return parse_json(str(BUNDLED_DONE_SCHEMA), BUNDLED_DONE_SCHEMA.read_text(encoding="utf-8"))
 
 
+def load_note_schema(source) -> dict[str, Any]:
+    """Project-owned note-schema.json wins over the bundled default."""
+    if PROJECT_NOTE_SCHEMA_FILE in source.list_files():
+        return parse_json(f"{source.label}/{PROJECT_NOTE_SCHEMA_FILE}", source.read(PROJECT_NOTE_SCHEMA_FILE))
+    return parse_json(str(BUNDLED_NOTE_SCHEMA), BUNDLED_NOTE_SCHEMA.read_text(encoding="utf-8"))
+
+
 def load_project_config(source) -> dict[str, Any]:
     if PROJECT_CONFIG_FILE in source.list_files():
         data = parse_json(f"{source.label}/{PROJECT_CONFIG_FILE}", source.read(PROJECT_CONFIG_FILE))
@@ -215,15 +225,21 @@ def load_project_config(source) -> dict[str, Any]:
 
 
 def item_files(source) -> list[str]:
-    reserved = {INDEX_FILE, PROJECT_SCHEMA_FILE, PROJECT_DONE_SCHEMA_FILE, PROJECT_CONFIG_FILE}
+    reserved = {INDEX_FILE, PROJECT_SCHEMA_FILE, PROJECT_DONE_SCHEMA_FILE, PROJECT_NOTE_SCHEMA_FILE, PROJECT_CONFIG_FILE}
     return [
         p for p in source.list_files()
-        if p not in reserved and not p.startswith(DONE_SUBDIR + "/")
+        if p not in reserved
+        and not p.startswith(DONE_SUBDIR + "/")
+        and not p.startswith(NOTES_SUBDIR + "/")
     ]
 
 
 def done_files(source) -> list[str]:
     return [p for p in source.list_files() if p.startswith(DONE_SUBDIR + "/")]
+
+
+def note_files(source) -> list[str]:
+    return [p for p in source.list_files() if p.startswith(NOTES_SUBDIR + "/")]
 
 
 def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -318,6 +334,51 @@ def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str
     return entries, errors
 
 
+def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Returns (agent notes newest first, error messages). Only the envelope
+    is validated - note content belongs to the agents."""
+    validator = jsonschema.Draft202012Validator(schema)
+    errors: list[str] = []
+    notes: list[dict[str, Any]] = []
+    seen_ids: dict[str, str] = {}
+
+    for rel_path in note_files(source):
+        label = f"{source.label}/{rel_path}"
+        try:
+            raw = source.read(rel_path)
+            data = parse_json(label, raw)
+        except ContractError as exc:
+            errors.append(str(exc))
+            continue
+
+        schema_errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+        if schema_errors:
+            for err in schema_errors:
+                where = "/".join(str(p) for p in err.path) or "(root)"
+                errors.append(f"{label}: {where}: {err.message}")
+            continue
+
+        note_id = data["id"]
+        expected_rel = f"{NOTES_SUBDIR}/{note_id}.json"
+        if rel_path != expected_rel:
+            errors.append(f"{label}: file must be at {expected_rel} (id defines the path)")
+        if note_id[5:13] != data["created"].replace("-", ""):
+            errors.append(f"{label}: id date part must match created {data['created']}")
+        if note_id in seen_ids:
+            errors.append(f"{label}: duplicate id {note_id} (also in {seen_ids[note_id]})")
+        else:
+            seen_ids[note_id] = rel_path
+
+        if raw != canonical_json(data):
+            errors.append(f"{label}: not in canonical form (run: hub.py fmt)")
+
+        data["_path"] = rel_path
+        notes.append(data)
+
+    notes.sort(key=lambda n: (n["created"], n["id"]), reverse=True)
+    return notes, errors
+
+
 def build_index(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated_by": "hub.py fmt",
@@ -360,7 +421,7 @@ def _worktree(backlog_dir: str) -> WorktreeSource:
 def cmd_fmt(args: argparse.Namespace) -> int:
     source = _worktree(args.backlog_dir)
     changed = 0
-    for rel_path in item_files(source) + done_files(source):
+    for rel_path in item_files(source) + done_files(source) + note_files(source):
         label = f"{source.label}/{rel_path}"
         raw = source.read(rel_path)
         formatted = canonical_json(parse_json(label, raw))
@@ -374,6 +435,8 @@ def cmd_fmt(args: argparse.Namespace) -> int:
     items, errors = validate_items(source, schema, project_cfg)
     _, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
+    _, note_errors = validate_notes(source, load_note_schema(source))
+    errors += note_errors
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -396,13 +459,15 @@ def cmd_validate(args: argparse.Namespace) -> int:
     items, errors = validate_items(source, schema, project_cfg)
     done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
+    notes, note_errors = validate_notes(source, load_note_schema(source))
+    errors += note_errors
     errors += validate_index(source, items)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         print(f"validate: {len(errors)} error(s)", file=sys.stderr)
         return 2
-    print(f"validate: OK ({len(items)} items, {len(done_entries)} done entries)")
+    print(f"validate: OK ({len(items)} items, {len(done_entries)} done entries, {len(notes)} notes)")
     return 0
 
 
@@ -500,6 +565,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     items, errors = validate_items(source, schema, project_cfg)
     done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
+    notes, note_errors = validate_notes(source, load_note_schema(source))
+    errors += note_errors
     errors += validate_index(source, items)
     if errors:
         for error in errors:
@@ -514,7 +581,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if release.exists():
         release = paths["releases"] / f"{stamp}-{os.getpid()}"
 
-    render_site(cfg, items, done_entries, commit, github, release)
+    render_site(cfg, items, done_entries, notes, commit, github, release)
 
     tmp_link = paths["root"] / "public.next"
     if tmp_link.exists() or tmp_link.is_symlink():
@@ -577,6 +644,7 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
+        ("notes", "notes.html", "Notes"),
         ("done", "done.html", "Done"),
         ("data", "data/index.json", "JSON"),
     ]
@@ -645,7 +713,10 @@ CSS = (
     '.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:0 0 14px;box-shadow:var(--shadow)}'
     '.card h2{font-size:17px;line-height:1.28;margin:0 0 10px;font-weight:650}.card p{margin:9px 0}'
     '.meta,.muted{color:var(--muted);font-size:13px}code{border:1px solid var(--border);border-radius:6px;background:var(--muted-bg);'
-    'padding:1px 5px;font-size:.92em}.pill{display:inline-flex;align-items:center;border:1px solid var(--border);background:var(--surface);'
+    'padding:1px 5px;font-size:.92em}'
+    'pre{white-space:pre-wrap;word-break:break-word;border:1px solid var(--border);border-radius:6px;'
+    'background:var(--muted-bg);padding:10px 12px;margin:8px 0;font-size:12.5px;line-height:1.5;overflow-x:auto}'
+    '.pill{display:inline-flex;align-items:center;border:1px solid var(--border);background:var(--surface);'
     'border-radius:6px;padding:2px 7px;margin:2px;font-size:12px;font-weight:500;line-height:1.45}'
     'a.pill{color:inherit;text-decoration:none}a.pill:hover{border-color:var(--ring)}'
     '.pill.stale{border-color:var(--warn-border);background:var(--warn-bg);color:var(--warn-fg)}'
@@ -785,6 +856,34 @@ def item_detail(
     )
 
 
+NOTE_ENVELOPE_KEYS = {"schema_version", "id", "title", "created", "author", "status", "tags", "body", "_path"}
+
+
+def note_detail(note: dict[str, Any], *, github_repo: str | None = None) -> str:
+    body = note["body"]
+    content = f"<pre>{h(body if isinstance(body, str) else canonical_json(body))}</pre>"
+    extras = {k: v for k, v in note.items() if k not in NOTE_ENVELOPE_KEYS}
+    if extras:
+        content += f"<h3>extra fields</h3><pre>{h(canonical_json(extras))}</pre>"
+    if github_repo:
+        content += "<h3>manage</h3><p class=item-actions>" + "".join(
+            f'<a class=button href="{h(feedback_issue_url(github_repo, note["id"], action, hint))}">{h(label)}</a>'
+            for action, label, hint in [
+                ("archive-note", "Archive", "<optional reason>"),
+                ("delete-note", "Delete", "<optional reason>"),
+            ]
+        ) + "</p>"
+    meta = "".join(
+        f"<span class=pill>{h(value)}</span>"
+        for value in [note["created"], note["author"], note["status"], *note.get("tags", [])]
+    )
+    search = canonical_json({k: v for k, v in note.items() if k != "_path"}).lower()
+    return (
+        f'<article class="card note-entry" data-status="{h(note["status"])}" data-note-search="{h(search)}">'
+        f"<h2>{h(note['id'])} · {h(note['title'])}</h2><div class=\"meta\">{meta}</div>{content}</article>"
+    )
+
+
 def done_search_text(entry: dict[str, Any]) -> str:
     values = [
         entry["id"],
@@ -826,6 +925,7 @@ def render_site(
     cfg: dict[str, Any],
     items: list[dict[str, Any]],
     done_entries: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
     commit: str,
     github: dict[str, Any],
     out: Path,
@@ -850,6 +950,7 @@ def render_site(
         "feedback_error": issue_error,
         "feedback_issues": issues,
         "generated_at": generated_at,
+        "notes": notes,
         "ref": project["backlog_ref"],
         "schema_version": 1,
     }
@@ -874,6 +975,11 @@ def render_site(
         card("Backlog", f"<p>{len(active_items)} active items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p><p><a href=backlog.html>Open backlog →</a></p>"),
         card("Risk", f"<p>{high_risk} high-risk item(s).</p><p><a href=\"backlog.html?risk=high\">View high-risk →</a></p>"),
         card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p><p><a href=done.html>View done →</a></p>"),
+        card("Notes", (
+            f"<p>{sum(1 for n in notes if n['status'] == 'active')} active agent note(s)"
+            + (f" (latest: {h(notes[0]['created'])})" if notes else "")
+            + ".</p><p><a href=notes.html>Browse notes →</a></p>"
+        )),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
     if has_github:
@@ -1160,6 +1266,64 @@ document.documentElement.classList.add("js");
         encoding="utf-8",
     )
 
+    note_status_options = (
+        '<option value="">Active</option><option value=archived>Archived</option><option value=all>All</option>'
+    )
+    notes_body = (
+        "<h1>Notes</h1><p class=muted>Agent memory: durable findings written by LLM agents for LLM agents "
+        "(audit results, discovered bugs, gotchas). Content and structure belong to the agents; "
+        "humans browse, search, archive, or delete.</p>"
+        "<form class=toolbar id=notes-controls>"
+        '<div class=control><label for=note-search>Search</label><input id=note-search type=search autocomplete=off></div>'
+        f'<div class=control><label for=note-status>Status</label><select id=note-status>{note_status_options}</select></div>'
+        '<div class=toolbar-actions><button class=button id=clear-note-search type=button>Reset</button></div></form>'
+        '<div class=empty-state id=note-empty-state hidden>No matching notes.</div>'
+        + "".join(note_detail(note, github_repo=project["github_repo"]) for note in notes)
+        + ("<p class=muted>No notes yet.</p>" if not notes else "")
+        + """
+<script>
+document.documentElement.classList.add("js");
+(function () {
+  const form = document.getElementById("notes-controls");
+  const search = document.getElementById("note-search");
+  const statusSelect = document.getElementById("note-status");
+  const reset = document.getElementById("clear-note-search");
+  const entries = Array.from(document.querySelectorAll(".note-entry"));
+  const empty = document.getElementById("note-empty-state");
+  if (!search || !entries.length) return;
+
+  function applyNoteFilters() {
+    const query = search.value.trim().toLowerCase();
+    const status = statusSelect ? statusSelect.value : "";
+    let visibleCount = 0;
+    entries.forEach((entry) => {
+      const statusOk = status === "all"
+        || (status ? entry.dataset.status === status : entry.dataset.status !== "archived");
+      const visible = statusOk && (!query || entry.dataset.noteSearch.includes(query));
+      entry.hidden = !visible;
+      if (visible) visibleCount += 1;
+    });
+    if (empty) empty.hidden = visibleCount > 0;
+  }
+
+  form?.addEventListener("submit", (event) => event.preventDefault());
+  search.addEventListener("input", applyNoteFilters);
+  statusSelect?.addEventListener("change", applyNoteFilters);
+  reset?.addEventListener("click", () => {
+    search.value = "";
+    if (statusSelect) statusSelect.value = "";
+    applyNoteFilters();
+  });
+  applyNoteFilters();
+})();
+</script>
+"""
+    )
+    (out / "notes.html").write_text(
+        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version),
+        encoding="utf-8",
+    )
+
     month_options = options(sorted({e["date"][:7] for e in done_entries}, reverse=True))
     done_body = (
         "<h1>Done</h1><p class=muted>Completed-work records, newest first. "
@@ -1261,6 +1425,19 @@ SAMPLE_ITEM = {
 }
 
 
+SAMPLE_NOTE = {
+    "schema_version": 1,
+    "id": "NOTE-20260703-sample-finding",
+    "title": "Self-test sample note",
+    "created": "2026-07-03",
+    "author": "agent:self-test",
+    "status": "active",
+    "tags": ["audit"],
+    "body": {"finding": "Sample structured finding.", "confidence": "high"},
+    "custom_field": ["agents may add whatever structure they need"],
+}
+
+
 SAMPLE_DONE = {
     "schema_version": 1,
     "id": "DONE-20260703-sample-entry",
@@ -1350,12 +1527,40 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     )
     assert any("date part" in e for e in errs), f"done id/date rule not enforced: {errs}"
 
+    note_schema = parse_json(str(BUNDLED_NOTE_SCHEMA), BUNDLED_NOTE_SCHEMA.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(note_schema)
+    good_note = canonical_json(SAMPLE_NOTE)
+
+    parsed_notes, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": good_note}), note_schema)
+    assert not errs, f"valid note (with extra field + object body) reported errors: {errs}"
+    assert parsed_notes[0]["id"] == "NOTE-20260703-sample-finding"
+
+    bad_note = json.loads(good_note)
+    bad_note["body"] = "free-form text is fine too"
+    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": canonical_json(bad_note)}), note_schema)
+    assert not errs, f"string body must be allowed: {errs}"
+
+    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-wrong-name.json": good_note}), note_schema)
+    assert any("file must be at" in e for e in errs), f"note path rule not enforced: {errs}"
+
+    bad_note = json.loads(good_note)
+    bad_note["created"] = "2026-07-04"
+    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": canonical_json(bad_note)}), note_schema)
+    assert any("date part" in e for e in errs), f"note id/created rule not enforced: {errs}"
+
+    bad_note = json.loads(good_note)
+    del bad_note["author"]
+    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": canonical_json(bad_note)}), note_schema)
+    assert any("author" in e for e in errs), f"note author requirement not enforced: {errs}"
+
     mixed = _MemorySource({
         "feature/FEAT-20260703-sample-item.json": good,
         "done/DONE-20260703-sample-entry.json": good_done,
+        "notes/NOTE-20260703-sample-finding.json": good_note,
     })
-    assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done files must not be treated as items"
+    assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done/note files must not be treated as items"
     assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
+    assert note_files(mixed) == ["notes/NOTE-20260703-sample-finding.json"]
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
