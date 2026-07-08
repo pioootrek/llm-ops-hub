@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import functools
+import hashlib
 import html
 import http.server
 import json
@@ -102,6 +103,7 @@ def _resolve_hub_config(path: Path, raw: Any) -> dict[str, Any]:
         return Path(value).expanduser()
 
     server = raw.get("server") if isinstance(raw.get("server"), dict) else {}
+    build = raw.get("build") if isinstance(raw.get("build"), dict) else {}
     return {
         "config_path": path,
         "project": {
@@ -121,6 +123,9 @@ def _resolve_hub_config(path: Path, raw: Any) -> dict[str, Any]:
         "server": {
             "host": str(server.get("host", "127.0.0.1")),
             "port": int(server.get("port", 8080)),
+        },
+        "build": {
+            "releases_keep": max(0, int(build.get("releases_keep", 20))),
         },
     }
 
@@ -436,6 +441,28 @@ def load_prs(github_repo: str | None) -> tuple[list[dict[str, Any]], str | None]
         return [], f"gh returned invalid JSON: {exc}"
 
 
+def build_state_key(project: dict[str, Any], commit: str, prs: list[dict[str, Any]], pr_error: str | None) -> str:
+    """Everything a release depends on: repo state, PR data, tool, project config.
+    If this key is unchanged since the last successful build, rendering again
+    would produce an identical release."""
+    return canonical_json({
+        "commit": commit,
+        "pr_error": pr_error,
+        "project": project,
+        "prs": prs,
+        "tool": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    })
+
+
+def prune_releases(releases_dir: Path, current: Path, keep: int) -> None:
+    if keep <= 0:
+        return
+    releases = sorted(p for p in releases_dir.iterdir() if p.is_dir())
+    for old in releases[:-keep]:
+        if old != current:
+            shutil.rmtree(old, ignore_errors=True)
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     cfg = load_hub_config(args.config)
     project = cfg["project"]
@@ -450,6 +477,19 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"build: ref {project['backlog_ref']} not found in mirror", file=sys.stderr)
         return 1
 
+    prs, pr_error = load_prs(project["github_repo"])
+
+    state_key = build_state_key(project, commit, prs, pr_error)
+    state_path = cfg["paths"]["cache"] / "last_build.json"
+    if (
+        not args.force
+        and state_path.is_file()
+        and state_path.read_text(encoding="utf-8") == state_key
+        and paths["public"].exists()
+    ):
+        print(f"build: no changes at {project['backlog_ref']} ({commit[:10]}); keeping current release")
+        return 0
+
     schema = load_schema(source)
     project_cfg = load_project_config(source)
     items, errors = validate_items(source, schema, project_cfg)
@@ -461,8 +501,6 @@ def cmd_build(args: argparse.Namespace) -> int:
             print(error, file=sys.stderr)
         print("build: refusing to render an invalid backlog; previous release stays live", file=sys.stderr)
         return 2
-
-    prs, pr_error = load_prs(project["github_repo"])
 
     paths["cache"].mkdir(parents=True, exist_ok=True)
     paths["releases"].mkdir(parents=True, exist_ok=True)
@@ -478,6 +516,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         tmp_link.unlink()
     tmp_link.symlink_to(release, target_is_directory=True)
     os.replace(tmp_link, paths["public"])
+    state_path.write_text(state_key, encoding="utf-8")
+    prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
     print(f"build: {len(items)} items at {project['backlog_ref']} ({commit[:10]}) -> {paths['public']}")
     return 0
 
@@ -506,7 +546,29 @@ def paragraphs(values: list[str]) -> str:
     return "".join(f"<p>{h(p)}</p>" for p in values)
 
 
-def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool, css_version: str = "") -> str:
+STALE_AFTER_MINUTES = 15
+
+STALE_SCRIPT = """
+<script>
+(function () {
+  const banner = document.getElementById("stale-banner");
+  const generated = Date.parse(banner ? banner.dataset.generatedAt : "");
+  if (!banner || !isFinite(generated)) return;
+  const limit = Number(banner.dataset.staleAfter);
+  function check() {
+    const minutes = Math.round((Date.now() - generated) / 60000);
+    if (minutes < limit) return;
+    banner.textContent = "This snapshot is " + minutes + " minutes old — sync or build may be failing.";
+    banner.hidden = false;
+  }
+  check();
+  setInterval(check, 60000);
+})();
+</script>
+"""
+
+
+def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool, generated_at: str = "", css_version: str = "") -> str:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
@@ -532,8 +594,10 @@ def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool
   <div><strong>{h(project_name)} Backlog Hub</strong><span>read-only · git is the source of truth</span></div>
   <nav>{nav}</nav>
 </header>
-<main>{body}</main>
-</body>
+<main>
+<div id="stale-banner" class="warn" data-generated-at="{h(generated_at)}" data-stale-after="{STALE_AFTER_MINUTES}" hidden></div>
+{body}</main>
+{STALE_SCRIPT}</body>
 </html>
 """
 
@@ -544,17 +608,33 @@ def card(title: str, content: str, meta: str = "") -> str:
 
 
 CSS = (
-    ':root{color-scheme:light;--background:#fafafa;--foreground:#09090b;--card:#fff;--muted:#71717a;'
+    ':root{color-scheme:light dark;--background:#fafafa;--foreground:#09090b;--card:#fff;--muted:#71717a;'
     '--muted-bg:#f4f4f5;--border:#e4e4e7;--ring:#18181b;--accent:#f4f4f5;--accent-fg:#18181b;'
-    '--radius:8px;--shadow:0 1px 2px rgba(24,24,27,.04)}*{box-sizing:border-box}'
+    '--surface:#fff;--surface-hover:#f4f4f5;--label:#52525b;--link:#0f766e;--row-hover:#f8fafc;'
+    '--on-strong:#fff;--header-bg:rgba(250,250,250,.92);'
+    '--warn-border:#f59e0b;--warn-bg:#fffbeb;--warn-fg:#92400e;'
+    '--risk-high-border:#fecaca;--risk-high-bg:#fef2f2;--risk-high-fg:#991b1b;'
+    '--risk-medium-border:#fde68a;--risk-medium-bg:#fffbeb;--risk-medium-fg:#92400e;'
+    '--risk-low-border:#bbf7d0;--risk-low-bg:#f0fdf4;--risk-low-fg:#166534;'
+    '--radius:8px;--shadow:0 1px 2px rgba(24,24,27,.04)}'
+    '@media(prefers-color-scheme:dark){:root{--background:#0c0c0e;--foreground:#fafafa;--card:#161618;--muted:#a1a1aa;'
+    '--muted-bg:#232326;--border:#2e2e33;--ring:#d4d4d8;--accent:#232326;--accent-fg:#fafafa;'
+    '--surface:#1c1c1f;--surface-hover:#28282c;--label:#a1a1aa;--link:#2dd4bf;--row-hover:#1f1f23;'
+    '--on-strong:#0c0c0e;--header-bg:rgba(12,12,14,.92);'
+    '--warn-border:#b45309;--warn-bg:#2a2010;--warn-fg:#fcd34d;'
+    '--risk-high-border:#7f1d1d;--risk-high-bg:#2a1215;--risk-high-fg:#fca5a5;'
+    '--risk-medium-border:#78350f;--risk-medium-bg:#271d0b;--risk-medium-fg:#fcd34d;'
+    '--risk-low-border:#14532d;--risk-low-bg:#0f2018;--risk-low-fg:#86efac;'
+    '--shadow:0 1px 2px rgba(0,0,0,.4)}}'
+    '*{box-sizing:border-box}'
     'body{margin:0;background:var(--background);color:var(--foreground);font-family:-apple-system,BlinkMacSystemFont,'
     '"Segoe UI",sans-serif;line-height:1.45;-webkit-font-smoothing:antialiased}'
-    'header{position:sticky;top:0;z-index:20;background:rgba(250,250,250,.92);backdrop-filter:saturate(180%) blur(12px);'
+    'header{position:sticky;top:0;z-index:20;background:var(--header-bg);backdrop-filter:saturate(180%) blur(12px);'
     'border-bottom:1px solid var(--border);padding:12px 24px;display:flex;justify-content:space-between;'
     'gap:16px;align-items:center}header strong{font-size:14px;font-weight:650}header span{display:block;color:var(--muted);font-size:12px}'
-    'nav{display:flex;gap:6px;flex-wrap:wrap}nav a{color:#27272a;text-decoration:none;border:1px solid transparent;'
+    'nav{display:flex;gap:6px;flex-wrap:wrap}nav a{color:var(--foreground);text-decoration:none;border:1px solid transparent;'
     'padding:6px 10px;border-radius:6px;background:transparent;font-size:13px;font-weight:500}'
-    'nav a:hover{background:var(--accent)}nav a.active{background:var(--foreground);color:#fff;border-color:var(--foreground)}'
+    'nav a:hover{background:var(--accent)}nav a.active{background:var(--foreground);color:var(--on-strong);border-color:var(--foreground)}'
     'main{max-width:1320px;margin:0 auto;padding:24px}h1{font-size:28px;line-height:1.15;margin:0;font-weight:700}'
     '.page-heading{display:flex;justify-content:space-between;gap:18px;align-items:flex-end;margin:2px 0 18px}'
     '.page-heading p{margin:6px 0 0;max-width:760px}.heading-meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}'
@@ -562,36 +642,38 @@ CSS = (
     '.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:0 0 14px;box-shadow:var(--shadow)}'
     '.card h2{font-size:17px;line-height:1.28;margin:0 0 10px;font-weight:650}.card p{margin:9px 0}'
     '.meta,.muted{color:var(--muted);font-size:13px}code{border:1px solid var(--border);border-radius:6px;background:var(--muted-bg);'
-    'padding:1px 5px;font-size:.92em}.pill{display:inline-flex;align-items:center;border:1px solid var(--border);background:#fff;'
+    'padding:1px 5px;font-size:.92em}.pill{display:inline-flex;align-items:center;border:1px solid var(--border);background:var(--surface);'
     'border-radius:6px;padding:2px 7px;margin:2px;font-size:12px;font-weight:500;line-height:1.45}'
+    'a.pill{color:inherit;text-decoration:none}a.pill:hover{border-color:var(--ring)}'
+    '.pill.stale{border-color:var(--warn-border);background:var(--warn-bg);color:var(--warn-fg)}'
     '.button{display:inline-flex;align-items:center;justify-content:center;height:32px;border:1px solid var(--border);'
-    'border-radius:6px;background:#fff;color:#18181b;padding:0 10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer}'
-    '.button:hover{background:#f4f4f5}.button.primary{background:#18181b;color:#fff;border-color:#18181b}.button:focus-visible,'
+    'border-radius:6px;background:var(--surface);color:var(--foreground);padding:0 10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none}'
+    '.button:hover{background:var(--surface-hover)}.button.primary{background:var(--foreground);color:var(--on-strong);border-color:var(--foreground)}.button:focus-visible,'
     '.control input:focus,.control select:focus{outline:2px solid var(--ring);outline-offset:2px}'
     '.toolbar{display:grid;grid-template-columns:minmax(220px,1.6fr) repeat(4,minmax(112px,1fr)) minmax(150px,1.15fr) 84px auto;'
-    'gap:8px;align-items:end;margin:0 0 12px}.control{display:grid;gap:4px}.control label{color:#52525b;font-size:11px;font-weight:600}'
-    '.control input,.control select{height:32px;width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;'
-    'color:#18181b;padding:0 8px;font:inherit;font-size:13px}.toolbar-actions{display:flex;gap:6px;align-items:end;justify-content:flex-end}'
-    '.risk-high{border-color:#fecaca;background:#fef2f2;color:#991b1b}'
-    '.risk-medium{border-color:#fde68a;background:#fffbeb;color:#92400e}'
-    '.risk-low{border-color:#bbf7d0;background:#f0fdf4;color:#166534}'
+    'gap:8px;align-items:end;margin:0 0 12px}.control{display:grid;gap:4px}.control label{color:var(--label);font-size:11px;font-weight:600}'
+    '.control input,.control select{height:32px;width:100%;border:1px solid var(--border);border-radius:6px;background:var(--surface);'
+    'color:var(--foreground);padding:0 8px;font:inherit;font-size:13px}.toolbar-actions{display:flex;gap:6px;align-items:end;justify-content:flex-end}'
+    '.risk-high{border-color:var(--risk-high-border);background:var(--risk-high-bg);color:var(--risk-high-fg)}'
+    '.risk-medium{border-color:var(--risk-medium-border);background:var(--risk-medium-bg);color:var(--risk-medium-fg)}'
+    '.risk-low{border-color:var(--risk-low-border);background:var(--risk-low-bg);color:var(--risk-low-fg)}'
     '.backlog-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(380px,.88fr);gap:16px;align-items:start}'
     '.backlog-shell.details-closed .backlog-layout{grid-template-columns:1fr}.backlog-shell.details-closed .detail-pane{display:none}'
     '.backlog-list,.detail-pane{min-width:0}.backlog-list{border:1px solid var(--border);border-radius:var(--radius);'
     'background:var(--card);box-shadow:var(--shadow);overflow:auto}.detail-pane{position:sticky;top:78px}'
     '.detail-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 8px}.detail-header h2{font-size:13px;margin:0}'
     '.detail-pane .empty{border:1px dashed var(--border);border-radius:var(--radius);padding:18px;background:var(--card)}'
-    '.item-row{cursor:pointer;outline:none}.item-row[hidden]{display:none!important}.item-row:hover{background:#f8fafc}.item-row.active{background:#f4f4f5}'
+    '.item-row{cursor:pointer;outline:none}.item-row[hidden]{display:none!important}.item-row:hover{background:var(--row-hover)}.item-row.active{background:var(--accent)}'
     '.item-row:focus-visible{box-shadow:inset 0 0 0 2px var(--ring)}.item-row.active td:first-child{box-shadow:inset 3px 0 0 var(--ring)}'
-    '.item-title-link{color:#18181b;text-decoration:none;font-weight:500}.item-title-link:hover{text-decoration:underline;text-underline-offset:3px}'
+    '.item-title-link{color:var(--foreground);text-decoration:none;font-weight:500}.item-title-link:hover{text-decoration:underline;text-underline-offset:3px}'
     '.item-detail{scroll-margin-top:92px}.item-detail h3{border-top:1px solid var(--border);padding-top:12px}'
     '.js .item-detail{display:none}.js .item-detail.active{display:block}'
     'table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:transparent}'
     'th,td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}'
     '.risk-col,.risk-cell{white-space:nowrap;text-align:right;padding-left:4px;padding-right:8px}'
     '.risk-cell .pill{margin:0;padding:1px 6px}'
-    'th{position:sticky;top:0;z-index:1;background:#fafafa;color:#52525b;font-size:12px;font-weight:600}'
-    'tbody tr:last-child td{border-bottom:0}a{color:#0f766e}'
+    'th{position:sticky;top:0;z-index:1;background:var(--background);color:var(--label);font-size:12px;font-weight:600}'
+    'tbody tr:last-child td{border-bottom:0}a{color:var(--link)}'
     '.backlog-shell:not(.details-closed) table,.backlog-shell:not(.details-closed) tbody{display:block}'
     '.backlog-shell:not(.details-closed) thead,.backlog-shell:not(.details-closed) colgroup{display:none}'
     '.backlog-shell:not(.details-closed) .item-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));'
@@ -601,18 +683,25 @@ CSS = (
     '.backlog-shell:not(.details-closed) .item-row td:nth-child(2){grid-column:1/-1;order:1;font-size:14px;line-height:1.35}'
     '.backlog-shell:not(.details-closed) .item-row td:nth-child(1){grid-column:1/-1;order:2;color:var(--muted)}'
     '.backlog-shell:not(.details-closed) .item-row td:first-child{box-shadow:none}.backlog-shell:not(.details-closed) .item-row td:nth-child(1) strong{display:block;font-size:12px}'
-    '.backlog-shell:not(.details-closed) .item-row td:nth-child(n+3){order:3;padding-top:4px;color:#52525b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    '.backlog-shell:not(.details-closed) .item-row td:nth-child(n+3){order:3;padding-top:4px;color:var(--label);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
     '.backlog-shell:not(.details-closed) .risk-cell{text-align:right}.backlog-shell:not(.details-closed) .muted{font-size:12px}'
-    '.empty-state{padding:18px;border-top:1px solid var(--border);background:#fff;color:var(--muted);font-size:13px}'
-    '.warn{border-left:4px solid #f59e0b;padding:10px 12px;background:#fffbeb;border-radius:0 8px 8px 0}'
-    'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:#52525b;font-weight:650}'
+    '.empty-state{padding:18px;border-top:1px solid var(--border);background:var(--card);color:var(--muted);font-size:13px}'
+    '.warn{border-left:4px solid var(--warn-border);padding:10px 12px;background:var(--warn-bg);color:var(--warn-fg);border-radius:0 8px 8px 0}'
+    '#stale-banner{margin:0 0 14px}'
+    '.dash-queue{margin-top:0}.queue-list{margin:0;padding:0;list-style:none}'
+    '.queue-list li{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--border)}'
+    '.queue-list li:last-child{border-bottom:0}.queue-list .pill{margin-left:auto}'
+    'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
     '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
     '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}}'
 )
 
 
-def item_detail(item: dict[str, Any], *, active: bool = False) -> str:
+STALE_AFTER_DAYS = 45
+
+
+def item_detail(item: dict[str, Any], *, active: bool = False, github_repo: str | None = None, today: dt.date | None = None) -> str:
     body = paragraphs(item["problem"])
     for section in ["value", "scope", "validation", "trigger"]:
         if item.get(section):
@@ -630,12 +719,27 @@ def item_detail(item: dict[str, Any], *, active: bool = False) -> str:
         )
     links = item.get("links") or {}
     if links.get("prs") or links.get("related_ids"):
+        def pr_pill(number: Any) -> str:
+            if github_repo:
+                return f'<a class=pill href="https://github.com/{h(github_repo)}/pull/{h(number)}">PR #{h(number)}</a>'
+            return f"<span class=pill>PR #{h(number)}</span>"
+
         body += "<h3>links</h3><p>" + "".join(
-            f"<span class=pill>PR #{h(n)}</span>" for n in links.get("prs", [])
+            pr_pill(n) for n in links.get("prs", [])
         ) + "".join(f"<span class=pill>{h(r)}</span>" for r in links.get("related_ids", [])) + "</p>"
-    meta = " ".join(
-        f"<span class=pill>{h(item[key])}</span>" for key in ["type", "area", "priority", "status", "created"]
-    )
+    created_label = item["created"]
+    stale = False
+    if today is not None:
+        age = (today - dt.date.fromisoformat(item["created"])).days
+        if age >= 0:
+            created_label = f"{item['created']} ({age}d)"
+        last_activity = max([item["created"]] + [n["date"] for n in item.get("notes", [])])
+        stale = (today - dt.date.fromisoformat(last_activity)).days > STALE_AFTER_DAYS
+    meta_pills = [f"<span class=pill>{h(item[key])}</span>" for key in ["type", "area", "priority", "status"]]
+    meta_pills.append(f"<span class=pill>{h(created_label)}</span>")
+    if stale:
+        meta_pills.append('<span class="pill stale" title="no note or edit in over 45 days">stale</span>')
+    meta = " ".join(meta_pills)
     active_class = " active" if active else ""
     return (
         f'<article id="{h(item["id"])}" class="card item-detail{active_class}" data-item-id="{h(item["id"])}">'
@@ -675,7 +779,7 @@ def done_detail(entry: dict[str, Any]) -> str:
     if entry.get("source"):
         meta += f"<span class=pill>{h(entry['source'])}</span>"
     return (
-        f'<article class="card done-entry" data-done-search="{h(done_search_text(entry))}">'
+        f'<article class="card done-entry" data-month="{h(entry["date"][:7])}" data-done-search="{h(done_search_text(entry))}">'
         f"<h2>{h(entry['title'])}</h2><div class=\"meta\">{meta}</div>{body}</article>"
     )
 
@@ -699,6 +803,7 @@ def render_site(
 
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     css_version = "?v=" + generated_at.replace("-", "").replace(":", "").replace("+", "")
+    today = dt.date.fromisoformat(generated_at[:10])
     index_data = {
         "backlog": items,
         "commit": commit,
@@ -725,20 +830,32 @@ def render_site(
 
     latest_done = f"latest: {h(done_entries[0]['date'])}" if done_entries else "no entries yet"
     home = [
-        card("Backlog", f"<p>{len(items)} open items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p>"),
-        card("Risk", f"<p>{high_risk} high-risk item(s).</p>"),
-        card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p>"),
+        card("Backlog", f"<p>{len(items)} open items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p><p><a href=backlog.html>Open backlog →</a></p>"),
+        card("Risk", f"<p>{high_risk} high-risk item(s).</p><p><a href=\"backlog.html?risk=high\">View high-risk →</a></p>"),
+        card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p><p><a href=done.html>View done →</a></p>"),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
     if has_prs:
-        home.insert(2, card("Open PRs", f"<p>{len(prs)} open pull requests.</p>" + (f"<p class=warn>{h(pr_error)}</p>" if pr_error else "")))
+        home.insert(2, card("Open PRs", f"<p>{len(prs)} open pull requests.</p>" + (f"<p class=warn>{h(pr_error)}</p>" if pr_error else "") + "<p><a href=prs.html>View PRs →</a></p>"))
+    now_items = [i for i in items if i["priority"] == "now"]
+    queue_rows = "".join(
+        f'<li><a class=item-title-link href="backlog.html#{h(i["id"])}">{h(i["id"])}</a>'
+        f'<span>{h(i["title"])}</span>'
+        f'<span class="pill risk-{h(i["risk"]["level"])}">{h(i["risk"]["level"])}</span></li>'
+        for i in now_items[:10]
+    )
+    queue_card = card(
+        "Now queue",
+        f"<ul class=queue-list>{queue_rows}</ul>" if queue_rows else '<p class=muted>No items with priority <code>now</code>.</p>',
+    )
     (out / "index.html").write_text(
         page(
             name,
             "Dashboard",
-            f"<section class=grid>{''.join(home)}</section>",
+            f"<section class=grid>{''.join(home)}</section><section class=dash-queue>{queue_card}</section>",
             active="home",
             has_prs=has_prs,
+            generated_at=generated_at,
             css_version=css_version,
         ),
         encoding="utf-8",
@@ -758,6 +875,9 @@ def render_site(
                 item["status"],
                 item["risk"]["level"],
                 item["_path"],
+                *item["problem"],
+                *item["value"],
+                *item["scope"],
             ]
         )
         rows.append(
@@ -773,7 +893,10 @@ def render_site(
             f"<td>{h(item['priority'])}</td><td>{h(item['status'])}</td>"
             f"<td class=risk-cell><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
         )
-    detail_cards = "".join(item_detail(item, active=idx == 0) for idx, item in enumerate(items))
+    detail_cards = "".join(
+        item_detail(item, active=idx == 0, github_repo=project["github_repo"], today=today)
+        for idx, item in enumerate(items)
+    )
     detail_pane = (
         '<div class=detail-header><h2>Details</h2><button class=button id=close-details type=button>Close</button></div>'
         + (detail_cards or '<div class="empty muted">No open backlog items.</div>')
@@ -814,9 +937,27 @@ document.documentElement.classList.add("js");
   };
   const priorityRank = { now: 0, next: 1, later: 2 };
   const riskRank = { high: 0, medium: 1, low: 2 };
+  const paramMap = { q: "query", type: "type", area: "area", priority: "priority", status: "status", risk: "risk", sort: "sort", dir: "dir" };
   let detailsOpen = true;
   if (!rows.length || !details.length || !shell || !tbody) return;
   form?.addEventListener("submit", (event) => event.preventDefault());
+
+  const initialParams = new URLSearchParams(location.search);
+  Object.entries(paramMap).forEach(([param, key]) => {
+    const value = initialParams.get(param);
+    if (value !== null && controls[key]) controls[key].value = value;
+  });
+
+  function syncUrl() {
+    const params = new URLSearchParams();
+    Object.entries(paramMap).forEach(([param, key]) => {
+      const value = (controls[key]?.value || "").trim();
+      const isDefault = value === "" || (key === "sort" && value === "order") || (key === "dir" && value === "asc");
+      if (!isDefault) params.set(param, value);
+    });
+    const query = params.toString();
+    history.replaceState(null, "", location.pathname + (query ? "?" + query : "") + location.hash);
+  }
 
   function clearActive(updateHash) {
     rows.forEach((row) => {
@@ -824,7 +965,7 @@ document.documentElement.classList.add("js");
       row.setAttribute("aria-selected", "false");
     });
     details.forEach((detail) => detail.classList.remove("active"));
-    if (updateHash) history.replaceState(null, "", location.pathname);
+    if (updateHash) history.replaceState(null, "", location.pathname + location.search);
   }
 
   function setDetailsOpen(open) {
@@ -884,6 +1025,7 @@ document.documentElement.classList.add("js");
       if (visibleRows[0]) showDetail(visibleRows[0].dataset.itemId, false);
       else clearActive(false);
     }
+    syncUrl();
   }
 
   rows.forEach((row) => {
@@ -964,15 +1106,17 @@ document.documentElement.classList.add("js");
         + backlog_script
     )
     (out / "backlog.html").write_text(
-        page(name, "Backlog", backlog_body, active="backlog", has_prs=has_prs, css_version=css_version),
+        page(name, "Backlog", backlog_body, active="backlog", has_prs=has_prs, generated_at=generated_at, css_version=css_version),
         encoding="utf-8",
     )
 
+    month_options = options(sorted({e["date"][:7] for e in done_entries}, reverse=True))
     done_body = (
         "<h1>Done</h1><p class=muted>Completed-work records, newest first. "
         "Grouping is a render concern - storage stays one file per entry.</p>"
         "<form class=toolbar id=done-controls>"
         '<div class=control><label for=done-search>Search</label><input id=done-search type=search autocomplete=off></div>'
+        f'<div class=control><label for=done-month>Month</label><select id=done-month>{month_options}</select></div>'
         '<div class=toolbar-actions><button class=button id=clear-done-search type=button>Reset</button></div></form>'
         '<div class=empty-state id=done-empty-state hidden>No matching done entries.</div>'
     )
@@ -991,6 +1135,7 @@ document.documentElement.classList.add("js");
 (function () {
   const form = document.getElementById("done-controls");
   const search = document.getElementById("done-search");
+  const monthSelect = document.getElementById("done-month");
   const reset = document.getElementById("clear-done-search");
   const entries = Array.from(document.querySelectorAll(".done-entry"));
   const months = Array.from(document.querySelectorAll(".done-month"));
@@ -999,9 +1144,11 @@ document.documentElement.classList.add("js");
 
   function applyDoneSearch() {
     const query = search.value.trim().toLowerCase();
+    const month = monthSelect ? monthSelect.value : "";
     let visibleCount = 0;
     entries.forEach((entry) => {
-      const visible = !query || entry.dataset.doneSearch.includes(query);
+      const visible = (!query || entry.dataset.doneSearch.includes(query))
+        && (!month || entry.dataset.month === month);
       entry.hidden = !visible;
       if (visible) visibleCount += 1;
     });
@@ -1022,8 +1169,10 @@ document.documentElement.classList.add("js");
 
   form?.addEventListener("submit", (event) => event.preventDefault());
   search.addEventListener("input", applyDoneSearch);
+  monthSelect?.addEventListener("change", applyDoneSearch);
   reset?.addEventListener("click", () => {
     search.value = "";
+    if (monthSelect) monthSelect.value = "";
     applyDoneSearch();
   });
   applyDoneSearch();
@@ -1031,7 +1180,7 @@ document.documentElement.classList.add("js");
 </script>
 """
     (out / "done.html").write_text(
-        page(name, "Done", done_body, active="done", has_prs=has_prs, css_version=css_version),
+        page(name, "Done", done_body, active="done", has_prs=has_prs, generated_at=generated_at, css_version=css_version),
         encoding="utf-8",
     )
 
@@ -1052,7 +1201,7 @@ document.documentElement.classList.add("js");
             "<tbody>" + "".join(pr_rows) + "</tbody></table>"
         )
         (out / "prs.html").write_text(
-            page(name, "PRs", pr_body, active="prs", has_prs=has_prs, css_version=css_version),
+            page(name, "PRs", pr_body, active="prs", has_prs=has_prs, generated_at=generated_at, css_version=css_version),
             encoding="utf-8",
         )
 
@@ -1169,6 +1318,21 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done files must not be treated as items"
     assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
 
+    cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
+    assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
+    assert cfg["project"]["backlog_dir"] == "docs/backlog", "backlog_dir default wrong"
+    assert cfg["build"]["releases_keep"] == 20, "releases_keep default must be 20"
+    assert cfg["paths"]["mirror"] == cfg["paths"]["root"] / "mirror.git", "mirror default must live under root"
+    cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "x"}, "build": {"releases_keep": -5}})
+    assert cfg["build"]["releases_keep"] == 0, "negative releases_keep must clamp to 0"
+    for bad_cfg in [{"schema_version": 1}, {"schema_version": 2, "project": {"repo_url": "x"}}, []]:
+        try:
+            _resolve_hub_config(Path("test-config.json"), bad_cfg)
+        except ConfigError:
+            pass
+        else:
+            raise AssertionError(f"invalid config accepted: {bad_cfg!r}")
+
     print("self-test passed")
     return 0
 
@@ -1187,6 +1351,8 @@ def main() -> int:
     for name, fn in [("sync", cmd_sync), ("build", cmd_build), ("serve", cmd_serve)]:
         p = sub.add_parser(name)
         p.add_argument("--config", default=None, help="hub config file (default: BACKLOG_HUB_CONFIG or config.json next to the tool)")
+        if name == "build":
+            p.add_argument("--force", action="store_true", help="render even if nothing changed since the last build")
         p.set_defaults(fn=fn)
 
     sub.add_parser("self-test").set_defaults(fn=cmd_self_test)

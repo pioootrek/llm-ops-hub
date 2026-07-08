@@ -1,4 +1,7 @@
 {
+  "build": {
+    "releases_keep": 20
+  },
   "paths": {
     "cache": "{root}/cache",
     "mirror": "{root}/mirror.git",

@@ -128,6 +128,7 @@ to `config.json` for a local or deployment-specific instance.
 | `paths.root` | runtime root | `~/winpath-hub` |
 | `paths.mirror` / `cache` / `releases` / `public` | each path individually overridable; `{root}` placeholder supported | `{root}/...` |
 | `server.host` / `server.port` | for `hub.py serve` | `127.0.0.1` / `8080` |
+| `build.releases_keep` | how many release directories to keep after a successful build (`0` = keep all) | `20` |
 
 ## Repository layout
 
@@ -153,7 +154,10 @@ applies to this repo and to the template pack shipped to projects.
   backlog items - keep them LAN-only.
 - `gh` (read scope) is needed only when `project.github_repo` is set.
 - Releases are immutable directories under `public_releases/`; `public` is a
-  symlink flipped atomically after a successful build.
+  symlink flipped atomically after a successful build. `build` skips rendering
+  when nothing changed since the last successful build (same commit, PR data,
+  tool, and config — use `build --force` to override) and prunes old release
+  directories down to `build.releases_keep`.
 
 ## Status
 
