@@ -63,16 +63,22 @@ and the fix is renaming one slug.
 Fields (full contract in `schema.json`):
 
 - `schema_version`: 1
-- `id`, `title`, `type`, `area`, `status` (`open|in-progress|blocked`),
-  `priority` (`now|next|later`), `created` (YYYY-MM-DD), `source` (where the
-  item came from)
+- `id`, `title`, `type`, `area`, `status`
+  (`open|in-progress|blocked|archived`), `priority` (`now|next|later`),
+  `created` (YYYY-MM-DD), `source` (where the item came from)
 - `risk`: `{level, dimensions[], rollback}` - **mandatory risk assessment**;
   `rollback` is required for `medium` and `high`
 - prose as paragraph arrays: `problem`, `value`, `scope`, `validation`,
   optional `trigger`
-- `notes`: optional dated entries `{date, text}` for blockers, decision
-  state, and updates - never edit history, append a note
+- `notes`: optional dated entries `{date, text, author?}` for blockers,
+  decision state, and updates - never edit history, append a note. `author`
+  convention: `human:<name>` or `agent:<name>`; notes from humans are
+  direction, treat them as input when picking up the item
 - `links`: optional `{prs: [123], related_ids: ["FIX-..."]}`
+
+`archived` means "keep for reference, not planned" - distinct from done
+(shipped, lives in `done/`) and dropped (deleted + done entry). Archived
+items stay in place; reviving one is setting `status` back to `open`.
 
 Write items as actionable outcomes. Never file an item that only says
 "improve" or "clean up" without problem, value, and validation.
@@ -107,10 +113,34 @@ archive.
 | Finished work | In ONE commit: delete the item file, add `done/DONE-<date>-<slug>.json` (with `item_id`, optionally `item_snapshot`), run fmt+validate |
 | Finished work with no backlog item | Add a done entry without `item_id` |
 | An obsolete/wrong item | Delete the file + add a short done entry saying it was dropped and why |
+| An item to keep but not plan | Set `status: archived` + a dated note saying why |
 | A decision needing human approval | Keep a `notes` entry `Decision state: proposed`; never mark approved yourself |
 
 The backlog holds OPEN work only. Completed history lives in `done/` and git,
 never in item files.
+
+## Hub feedback issues
+
+If the project is on GitHub, the hub renders feedback buttons that open
+prefilled issues labeled `backlog-feedback`, with a machine-readable body:
+
+```
+item: <item id>
+action: guidance | set-priority | archive
+payload: <guidance text, target priority, or archive reason>
+```
+
+When you find open `backlog-feedback` issues, apply them as normal backlog
+commits:
+
+- `guidance` -> append a `notes` entry with the text; set `author` to the
+  issue author (`human:<login>`)
+- `set-priority` -> set `priority` to the payload value
+- `archive` -> set `status: archived` + a dated note with the reason
+
+Then run fmt + validate, commit, and close the issue referencing the commit.
+Ignore issues whose payload conflicts with the schema - comment on the issue
+instead of weakening the contract.
 
 ## How to query (for agents)
 

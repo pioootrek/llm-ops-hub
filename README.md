@@ -63,9 +63,13 @@ stabilizes.
 ```
 
 Types: `feature` (FEAT), `fix` (FIX), `rework` (RWK), `security` (SEC).
-Prose is arrays of paragraphs (diff-friendly). `risk` is mandatory;
-`rollback` is required for `medium`/`high`. `notes` are append-only dated
-entries - the structured replacement for comments.
+Status: `open`, `in-progress`, `blocked`, or `archived` (kept for reference,
+not planned; hidden from the default backlog view). Prose is arrays of
+paragraphs (diff-friendly). `risk` is mandatory; `rollback` is required for
+`medium`/`high`. `notes` are append-only dated entries - the structured
+replacement for comments - with an optional `author` (`human:<name>` /
+`agent:<name>`); human-authored notes render highlighted as direction for
+agents.
 
 ## Done entries
 
@@ -76,6 +80,16 @@ a done entry carrying `item_id` (and optionally the full `item_snapshot`),
 run `fmt` + `validate`. Because storage is one flat file per entry, there is
 never a giant done log to archive - grouping (by month, by area) happens in
 the rendered site, not on disk.
+
+## Human feedback
+
+The hub is read-only, but when `project.github_repo` is set, each rendered
+item carries three feedback buttons - **Add guidance**, **Change priority**,
+**Archive** - that open a prefilled GitHub issue (label `backlog-feedback`)
+with a machine-readable body. The human authenticates with their own GitHub
+login; the hub still needs no write token. Applying the issue is a normal
+backlog commit in the project repo, made by the next agent session (the
+workflow is in `templates/AGENTS.md`) or by project-side automation.
 
 ## Quickstart
 

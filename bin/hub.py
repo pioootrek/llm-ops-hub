@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -667,6 +668,8 @@ CSS = (
     '.item-row:focus-visible{box-shadow:inset 0 0 0 2px var(--ring)}.item-row.active td:first-child{box-shadow:inset 3px 0 0 var(--ring)}'
     '.item-title-link{color:var(--foreground);text-decoration:none;font-weight:500}.item-title-link:hover{text-decoration:underline;text-underline-offset:3px}'
     '.item-detail{scroll-margin-top:92px}.item-detail h3{border-top:1px solid var(--border);padding-top:12px}'
+    '.note-human{border-left:3px solid var(--ring);padding-left:9px;font-size:13px}'
+    '.item-actions{display:flex;gap:6px;flex-wrap:wrap}'
     '.js .item-detail{display:none}.js .item-detail.active{display:block}'
     'table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:transparent}'
     'th,td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}'
@@ -700,6 +703,20 @@ CSS = (
 
 STALE_AFTER_DAYS = 45
 
+FEEDBACK_LABEL = "backlog-feedback"
+
+
+def feedback_issue_url(github_repo: str, item_id: str, action: str, payload_hint: str) -> str:
+    """Prefilled GitHub issue link - the hub's only 'write' surface, which is
+    none at all: the human authenticates as themselves, and the change is
+    applied later as a normal commit in the project repo (see templates/AGENTS.md)."""
+    query = urllib.parse.urlencode({
+        "labels": FEEDBACK_LABEL,
+        "title": f"[{FEEDBACK_LABEL}] {item_id}: {action}",
+        "body": f"item: {item_id}\naction: {action}\npayload: {payload_hint}\n",
+    })
+    return f"https://github.com/{github_repo}/issues/new?{query}"
+
 
 def item_detail(item: dict[str, Any], *, active: bool = False, github_repo: str | None = None, today: dt.date | None = None) -> str:
     body = paragraphs(item["problem"])
@@ -714,9 +731,13 @@ def item_detail(item: dict[str, Any], *, active: bool = False, github_repo: str 
     if risk.get("rollback"):
         body += f"<p><strong>Rollback:</strong> {h(risk['rollback'])}</p>"
     if item.get("notes"):
-        body += "<h3>notes</h3>" + "".join(
-            f"<p class=muted>{h(note['date'])} — {h(note['text'])}</p>" for note in item["notes"]
-        )
+        def note_html(note: dict[str, Any]) -> str:
+            author = note.get("author", "")
+            label = h(note["date"]) + (f" · {h(author)}" if author else "")
+            css_class = "note-human" if author.startswith("human") else "muted"
+            return f'<p class="{css_class}"><span class=muted>{label}</span> — {h(note["text"])}</p>'
+
+        body += "<h3>notes</h3>" + "".join(note_html(note) for note in item["notes"])
     links = item.get("links") or {}
     if links.get("prs") or links.get("related_ids"):
         def pr_pill(number: Any) -> str:
@@ -740,6 +761,15 @@ def item_detail(item: dict[str, Any], *, active: bool = False, github_repo: str 
     if stale:
         meta_pills.append('<span class="pill stale" title="no note or edit in over 45 days">stale</span>')
     meta = " ".join(meta_pills)
+    if github_repo:
+        body += "<h3>feedback</h3><p class=item-actions>" + "".join(
+            f'<a class=button href="{h(feedback_issue_url(github_repo, item["id"], action, hint))}">{h(label)}</a>'
+            for action, label, hint in [
+                ("guidance", "Add guidance", "<write your guidance for the agent here>"),
+                ("set-priority", "Change priority", "now | next | later (keep exactly one)"),
+                ("archive", "Archive", "<optional reason>"),
+            ]
+        ) + "</p><p class=muted>Opens a prefilled GitHub issue; the change lands as a commit in the project repo.</p>"
     active_class = " active" if active else ""
     return (
         f'<article id="{h(item["id"])}" class="card item-detail{active_class}" data-item-id="{h(item["id"])}">'
@@ -828,16 +858,18 @@ def render_site(
     def pills(counter: dict[str, int]) -> str:
         return "".join(f"<span class=pill>{h(k)}: {v}</span>" for k, v in sorted(counter.items()))
 
+    active_items = [i for i in items if i["status"] != "archived"]
+    archived_count = len(items) - len(active_items)
     latest_done = f"latest: {h(done_entries[0]['date'])}" if done_entries else "no entries yet"
     home = [
-        card("Backlog", f"<p>{len(items)} open items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p><p><a href=backlog.html>Open backlog →</a></p>"),
+        card("Backlog", f"<p>{len(active_items)} active items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p><p><a href=backlog.html>Open backlog →</a></p>"),
         card("Risk", f"<p>{high_risk} high-risk item(s).</p><p><a href=\"backlog.html?risk=high\">View high-risk →</a></p>"),
         card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p><p><a href=done.html>View done →</a></p>"),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
     if has_prs:
         home.insert(2, card("Open PRs", f"<p>{len(prs)} open pull requests.</p>" + (f"<p class=warn>{h(pr_error)}</p>" if pr_error else "") + "<p><a href=prs.html>View PRs →</a></p>"))
-    now_items = [i for i in items if i["priority"] == "now"]
+    now_items = [i for i in active_items if i["priority"] == "now"]
     queue_rows = "".join(
         f'<li><a class=item-title-link href="backlog.html#{h(i["id"])}">{h(i["id"])}</a>'
         f'<span>{h(i["title"])}</span>'
@@ -910,7 +942,7 @@ def render_site(
     type_options = options(sorted({item["type"] for item in items}))
     area_options = options(sorted({item["area"] for item in items}))
     priority_options = options(["now", "next", "later"])
-    status_options = options(["open", "in-progress", "blocked"])
+    status_options = options(["open", "in-progress", "blocked", "archived"], label="Active")
     risk_options = options(["high", "medium", "low"])
     backlog_script = """
 <script>
@@ -995,11 +1027,12 @@ document.documentElement.classList.add("js");
 
   function matchesFilters(row) {
     const query = (controls.query?.value || "").trim().toLowerCase();
+    const status = controls.status?.value || "";
     return (!query || row.dataset.search.includes(query))
       && (!controls.type?.value || row.dataset.type === controls.type.value)
       && (!controls.area?.value || row.dataset.area === controls.area.value)
       && (!controls.priority?.value || row.dataset.priority === controls.priority.value)
-      && (!controls.status?.value || row.dataset.status === controls.status.value)
+      && (status ? row.dataset.status === status : row.dataset.status !== "archived")
       && (!controls.risk?.value || row.dataset.risk === controls.risk.value);
   }
 
@@ -1078,8 +1111,9 @@ document.documentElement.classList.add("js");
         '<div class=page-heading><div>'
         f"<h1>Backlog</h1><p class=muted>Repo-canonical items read at <code>{h(project['backlog_ref'])}</code>"
         f" @ <code>{h(commit[:10])}</code>. Edits go through the project repo, not the hub.</p></div>"
-        f"<div class=heading-meta><span class=pill>{len(items)} open</span>"
-        f"<span class=pill>{h(project['backlog_ref'])}</span><span class=pill>{h(commit[:10])}</span></div></div>"
+        f"<div class=heading-meta><span class=pill>{len(active_items)} active</span>"
+        + (f"<span class=pill>{archived_count} archived</span>" if archived_count else "")
+        + f"<span class=pill>{h(project['backlog_ref'])}</span><span class=pill>{h(commit[:10])}</span></div></div>"
         "<section class=backlog-shell>"
         "<form class=toolbar id=backlog-controls>"
         '<div class=control><label for=filter-query>Search</label><input id=filter-query type=search autocomplete=off></div>'
@@ -1289,6 +1323,16 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         _MemorySource({"feature/FEAT-20260703-sample-item.json": good}), schema, {"areas": ["other-area"]}
     )
     assert any("not in project config areas" in e for e in errs), f"area enum not enforced: {errs}"
+
+    archived = json.loads(good)
+    archived["status"] = "archived"
+    archived["notes"].append({"author": "human:reviewer", "date": "2026-07-08", "text": "Park this for now."})
+    _, errs = validate_items(_MemorySource({"feature/FEAT-20260703-sample-item.json": canonical_json(archived)}), schema, {})
+    assert not errs, f"archived item with authored note reported errors: {errs}"
+
+    bad = json.loads(good)
+    bad["notes"][0]["author"] = ""
+    expect_error({"feature/FEAT-20260703-sample-item.json": canonical_json(bad)}, "author")
 
     index_errors = validate_index(_MemorySource({"feature/FEAT-20260703-sample-item.json": good}), items)
     assert index_errors and "missing" in index_errors[0], "missing index must be reported"
