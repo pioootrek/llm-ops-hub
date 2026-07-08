@@ -122,6 +122,12 @@ exists; the actual problems are cost and observability:
 
 ## 4. The PRs page: why is it there, and should it stay?
 
+> **Decision (2026-07-08): dropped.** The PRs page, `gh pr list`, and
+> PR↔item matching were removed; `gh` stays only for the `backlog-feedback`
+> issue list on the dashboard, and `links.prs` pills remain as static links.
+
+
+
 Honest answer: in its current form it earns little. It lists *all* open PRs
 of the monitored repo — GitHub's own PR list does that better, and the page
 costs a `gh` dependency plus a token on the worker.

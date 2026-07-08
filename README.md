@@ -89,42 +89,116 @@ item carries three feedback buttons - **Add guidance**, **Change priority**,
 with a machine-readable body. The human authenticates with their own GitHub
 login; the hub still needs no write token. Applying the issue is a normal
 backlog commit in the project repo, made by the next agent session (the
-workflow is in `templates/AGENTS.md`) or by project-side automation.
+workflow is in `templates/AGENTS.md`) or by project-side automation. Until
+applied, open feedback issues are listed on the hub dashboard.
 
-## Quickstart
+## Installation
 
-### In the monitored project (agents and humans editing the backlog)
+Three parts: wire up the monitored project, tell that project's AI agents
+how to use the backlog, and stand up the hub worker. The first two happen in
+the project repo; the third is one machine on your LAN.
 
-```bash
-# after any edit under docs/backlog/:
-python3 bin/hub.py fmt      --backlog-dir docs/backlog
-python3 bin/hub.py validate --backlog-dir docs/backlog   # must exit 0 before commit
-git commit ...
-```
+### 1. Wire up the monitored project
 
-`fmt` canonicalizes files and regenerates `index.json` (the generated fast
-scan surface - never hand-edited). The full agent workflow (when to write
-what, lifecycle, query patterns) is `templates/AGENTS.md`, which you drop
-into the project's backlog directory together with `templates/CLAUDE.md` and
-a project `config.json` (areas enum).
-
-### On the hub host (rendering and serving)
+On any machine that edits the backlog (developer laptops, agent runners),
+clone this repo once and install the single dependency:
 
 ```bash
-pip install -r requirements.txt      # jsonschema; Python 3.9+
-python3 bin/hub.py self-test         # no config or network needed
-python3 bin/hub.py sync              # clone/fetch the bare mirror
-python3 bin/hub.py build             # render a static release, flip the symlink
-python3 bin/hub.py serve             # optional stdlib static server
+git clone <this-repo-url> ~/tools/backlog-hub
+python3 -m pip install jsonschema
 ```
+
+Then, inside the project repo:
+
+```bash
+mkdir -p docs/backlog/feature docs/backlog/fix docs/backlog/rework \
+         docs/backlog/security docs/backlog/done
+cp ~/tools/backlog-hub/templates/AGENTS.md \
+   ~/tools/backlog-hub/templates/CLAUDE.md \
+   ~/tools/backlog-hub/templates/config.json docs/backlog/
+$EDITOR docs/backlog/config.json     # set this project's areas enum
+python3 ~/tools/backlog-hub/bin/hub.py fmt      --backlog-dir docs/backlog
+python3 ~/tools/backlog-hub/bin/hub.py validate --backlog-dir docs/backlog
+git add docs/backlog && git commit -m "Adopt backlog-as-code"
+```
+
+The copied `docs/backlog/AGENTS.md` is the operating guide agents load when
+working inside the backlog directory (record contract, lifecycle, query
+patterns); adjust its marked spots before committing. From then on the whole
+day-to-day workflow is: edit files under `docs/backlog/`, run `fmt`, run
+`validate` (must exit 0), commit to the backlog branch. `fmt` canonicalizes
+files and regenerates `index.json` - the generated fast-scan surface, never
+hand-edited.
+
+### 2. Onboard the project's agents
+
+Agents will not look into `docs/backlog/` on their own - the project's root
+instruction file has to send them there. Paste the following into the
+project's root `AGENTS.md` (or `CLAUDE.md`, if that is the file your agents
+load), and fill in the two placeholders:
+
+```markdown
+## Backlog
+
+This project keeps its backlog as code: one canonical JSON file per item
+under `docs/backlog/`, rendered elsewhere by a read-only hub. The operating
+guide is `docs/backlog/AGENTS.md` - read it before adding, updating, or
+closing backlog items. The short version:
+
+- Backlog changes are ordinary commits to `<backlog-branch>`; there is no
+  other write path. Never edit `docs/backlog/index.json` by hand.
+- After ANY edit under `docs/backlog/`, run
+  `python3 <path-to-hub>/bin/hub.py fmt --backlog-dir docs/backlog`, then
+  the same command with `validate` - it must exit 0 before you commit.
+- Pick up work from items with `status: open`, highest priority first
+  (`now` > `next` > `later`); read the full item before starting, and treat
+  human-authored notes (`"author": "human:..."`) as direction.
+- When you finish work, close the loop in one commit: delete the item file
+  and add a `done/` entry (see the guide).
+- Open GitHub issues labeled `backlog-feedback` are human instructions for
+  the backlog - apply them as described in the guide, then close them.
+```
+
+Reword freely; the load-bearing parts are the pointer to
+`docs/backlog/AGENTS.md`, the fmt+validate rule, and the `backlog-feedback`
+bullet (drop that one if the project is not on GitHub). If the project
+follows the `AGENTS.md`-plus-`CLAUDE.md`-include convention, the snippet goes
+into `AGENTS.md` only.
+
+### 3. Stand up the hub worker
+
+On the LAN machine that renders and serves the site:
+
+```bash
+git clone <this-repo-url> && cd backlog-hub
+python3 -m pip install -r requirements.txt   # jsonschema; Python 3.9+
+python3 bin/hub.py self-test                 # no config or network needed
+cp config.example.json config.json && $EDITOR config.json
+python3 bin/hub.py sync                      # clone/fetch the bare mirror
+python3 bin/hub.py build                     # render a release, flip the symlink
+python3 bin/hub.py serve                     # or install the systemd units
+```
+
+For unattended operation, adjust the paths/user inside the `systemd/` units
+and install them: the timer runs sync+build every 2 minutes, the HTTP service
+serves the site LAN-only.
+
+If `project.github_repo` is set (enables the feedback loop), additionally:
+
+```bash
+gh auth login    # a token with read scope is enough
+gh label create backlog-feedback --repo <owner/repo> \
+  --description "Backlog feedback filed from the hub"
+```
+
+The label must exist up front - GitHub silently drops unknown labels from
+prefilled issue links.
 
 `build` validates everything first and **refuses to render an invalid
-backlog** - the previous release stays live. Output: `index.html`
-(dashboard), `backlog.html` (table + item cards), `done.html` (completed work
-grouped by month), optional `prs.html` (open PRs joined to backlog items via
-`links.prs` and item-id mentions in branch names/titles; matched items get an
-"in flight" badge in the backlog), and `data/index.json` for agents (items +
-done + PRs + feedback issues + ref + commit + generated_at).
+backlog** - the previous release stays live. Output: `index.html` (dashboard,
+including open feedback issues), `backlog.html` (table + item cards),
+`done.html` (completed work grouped by month), and `data/index.json` for
+agents (items + done + feedback issues + ref + commit + generated_at).
 
 ## Configuration
 
@@ -139,7 +213,7 @@ to `config.json` for a local or deployment-specific instance.
 | `project.repo_url` | remote of the monitored repo (mirror source) | required |
 | `project.backlog_ref` | the single writable backlog branch | `main` |
 | `project.backlog_dir` | backlog path inside the repo | `docs/backlog` |
-| `project.github_repo` | `owner/repo` for the PRs page, feedback buttons/issues, and PR↔item matching; omit to skip all of it (no `gh` needed) | unset |
+| `project.github_repo` | `owner/repo` enabling the feedback loop (buttons on item cards, open `backlog-feedback` issues on the dashboard); omit to skip it (no `gh` needed) | unset |
 | `project.name` | display name in the rendered site | `Backlog` |
 | `paths.root` | runtime root | `~/winpath-hub` |
 | `paths.mirror` / `cache` / `releases` / `public` | each path individually overridable; `{root}` placeholder supported | `{root}/...` |
@@ -171,9 +245,9 @@ applies to this repo and to the template pack shipped to projects.
 - `gh` (read scope) is needed only when `project.github_repo` is set.
 - Releases are immutable directories under `public_releases/`; `public` is a
   symlink flipped atomically after a successful build. `build` skips rendering
-  when nothing changed since the last successful build (same commit, PR data,
-  tool, and config — use `build --force` to override) and prunes old release
-  directories down to `build.releases_keep`.
+  when nothing changed since the last successful build (same commit, feedback
+  issues, tool, and config — use `build --force` to override) and prunes old
+  release directories down to `build.releases_keep`.
 
 ## Status
 

@@ -437,15 +437,6 @@ def gh_json(args: list[str]) -> tuple[list[dict[str, Any]], str | None]:
         return [], f"gh returned invalid JSON: {exc}"
 
 
-def load_prs(github_repo: str | None) -> tuple[list[dict[str, Any]], str | None]:
-    if not github_repo:
-        return [], None
-    return gh_json(
-        ["pr", "list", "--repo", github_repo, "--state", "open",
-         "--json", "number,title,headRefName,baseRefName,isDraft,updatedAt,url", "--limit", "100"]
-    )
-
-
 def load_feedback_issues(github_repo: str | None) -> tuple[list[dict[str, Any]], str | None]:
     if not github_repo:
         return [], None
@@ -453,31 +444,6 @@ def load_feedback_issues(github_repo: str | None) -> tuple[list[dict[str, Any]],
         ["issue", "list", "--repo", github_repo, "--state", "open",
          "--label", FEEDBACK_LABEL, "--json", "number,title,url,updatedAt", "--limit", "100"]
     )
-
-
-def match_prs(
-    items: list[dict[str, Any]], prs: list[dict[str, Any]]
-) -> tuple[dict[str, list[dict[str, Any]]], dict[int, list[str]]]:
-    """Join open PRs to backlog items via links.prs plus item-id mentions in
-    PR branch names and titles. Returns (item_id -> PRs, pr_number -> item ids)."""
-    by_number = {pr["number"]: pr for pr in prs}
-    item_prs: dict[str, list[dict[str, Any]]] = {}
-    pr_items: dict[int, list[str]] = {number: [] for number in by_number}
-    for item in items:
-        matched: dict[int, dict[str, Any]] = {}
-        for number in (item.get("links") or {}).get("prs", []):
-            if number in by_number:
-                matched[number] = by_number[number]
-        needle = item["id"].lower()
-        for pr in prs:
-            haystack = f"{pr.get('headRefName', '')} {pr.get('title', '')}".lower()
-            if needle in haystack:
-                matched[pr["number"]] = pr
-        if matched:
-            item_prs[item["id"]] = [matched[number] for number in sorted(matched)]
-            for number in matched:
-                pr_items[number].append(item["id"])
-    return item_prs, pr_items
 
 
 def build_state_key(project: dict[str, Any], commit: str, github: dict[str, Any]) -> str:
@@ -515,9 +481,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"build: ref {project['backlog_ref']} not found in mirror", file=sys.stderr)
         return 1
 
-    prs, pr_error = load_prs(project["github_repo"])
     issues, issue_error = load_feedback_issues(project["github_repo"])
-    github = {"issue_error": issue_error, "issues": issues, "pr_error": pr_error, "prs": prs}
+    github = {"issue_error": issue_error, "issues": issues}
 
     state_key = build_state_key(project, commit, github)
     state_path = cfg["paths"]["cache"] / "last_build.json"
@@ -608,15 +573,13 @@ STALE_SCRIPT = """
 """
 
 
-def page(project_name: str, title: str, body: str, *, active: str, has_prs: bool, generated_at: str = "", css_version: str = "") -> str:
+def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "") -> str:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
         ("done", "done.html", "Done"),
+        ("data", "data/index.json", "JSON"),
     ]
-    if has_prs:
-        links.append(("prs", "prs.html", "PRs"))
-    links.append(("data", "data/index.json", "JSON"))
     nav = "".join(
         f'<a class="{"active" if key == active else ""}" href="{href}">{label}</a>'
         for key, href, label in links
@@ -686,7 +649,6 @@ CSS = (
     'border-radius:6px;padding:2px 7px;margin:2px;font-size:12px;font-weight:500;line-height:1.45}'
     'a.pill{color:inherit;text-decoration:none}a.pill:hover{border-color:var(--ring)}'
     '.pill.stale{border-color:var(--warn-border);background:var(--warn-bg);color:var(--warn-fg)}'
-    '.pill.in-flight{border-color:var(--link);color:var(--link)}'
     '.button{display:inline-flex;align-items:center;justify-content:center;height:32px;border:1px solid var(--border);'
     'border-radius:6px;background:var(--surface);color:var(--foreground);padding:0 10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none}'
     '.button:hover{background:var(--surface-hover)}.button.primary{background:var(--foreground);color:var(--on-strong);border-color:var(--foreground)}.button:focus-visible,'
@@ -764,7 +726,6 @@ def item_detail(
     active: bool = False,
     github_repo: str | None = None,
     today: dt.date | None = None,
-    open_prs: list[dict[str, Any]] | None = None,
 ) -> str:
     body = paragraphs(item["problem"])
     for section in ["value", "scope", "validation", "trigger"]:
@@ -795,11 +756,6 @@ def item_detail(
         body += "<h3>links</h3><p>" + "".join(
             pr_pill(n) for n in links.get("prs", [])
         ) + "".join(f"<span class=pill>{h(r)}</span>" for r in links.get("related_ids", [])) + "</p>"
-    if open_prs:
-        body += "<h3>in flight</h3><p>" + "".join(
-            f'<a class="pill in-flight" href="{h(pr["url"])}">#{h(pr["number"])} {h(pr["title"])}</a>'
-            for pr in open_prs
-        ) + "</p>"
     created_label = item["created"]
     stale = False
     if today is not None:
@@ -876,12 +832,9 @@ def render_site(
 ) -> None:
     project = cfg["project"]
     name = project["name"]
-    has_prs = bool(project["github_repo"])
-    prs = github["prs"]
-    pr_error = github["pr_error"]
+    has_github = bool(project["github_repo"])
     issues = github["issues"]
     issue_error = github["issue_error"]
-    item_prs, pr_items = match_prs(items, prs)
 
     (out / "assets").mkdir(parents=True, exist_ok=True)
     (out / "data").mkdir(parents=True, exist_ok=True)
@@ -897,8 +850,6 @@ def render_site(
         "feedback_error": issue_error,
         "feedback_issues": issues,
         "generated_at": generated_at,
-        "pr_error": pr_error,
-        "prs": prs,
         "ref": project["backlog_ref"],
         "schema_version": 1,
     }
@@ -925,18 +876,11 @@ def render_site(
         card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p><p><a href=done.html>View done →</a></p>"),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
-    if has_prs:
-        linked_pr_count = sum(1 for ids in pr_items.values() if ids)
-        home.insert(2, card(
-            "Open PRs",
-            f"<p>{len(prs)} open pull requests, {linked_pr_count} linked to backlog items.</p>"
-            + (f"<p class=warn>{h(pr_error)}</p>" if pr_error else "")
-            + "<p><a href=prs.html>View PRs →</a></p>",
-        ))
+    if has_github:
         issue_links = "".join(
             f'<p><a href="{h(i["url"])}">#{h(i["number"])}</a> {h(i["title"])}</p>' for i in issues[:5]
         )
-        home.insert(3, card(
+        home.insert(2, card(
             "Feedback",
             f"<p>{len(issues)} open <code>{FEEDBACK_LABEL}</code> issue(s) waiting to be applied.</p>"
             + issue_links
@@ -959,7 +903,6 @@ def render_site(
             "Dashboard",
             f"<section class=grid>{''.join(home)}</section><section class=dash-queue>{queue_card}</section>",
             active="home",
-            has_prs=has_prs,
             generated_at=generated_at,
             css_version=css_version,
         ),
@@ -970,10 +913,6 @@ def render_site(
     for idx, item in enumerate(items):
         risk_class = f"risk-{h(item['risk']['level'])}"
         active_class = " active" if idx == 0 else ""
-        in_flight = item_prs.get(item["id"], [])
-        in_flight_badge = "".join(
-            f'<span class="pill in-flight" title="{h(pr["title"])}">PR #{h(pr["number"])}</span>' for pr in in_flight
-        )
         search_text = " ".join(
             [
                 item["id"],
@@ -984,7 +923,6 @@ def render_site(
                 item["status"],
                 item["risk"]["level"],
                 item["_path"],
-                *(["in-flight"] if in_flight else []),
                 *item["problem"],
                 *item["value"],
                 *item["scope"],
@@ -998,19 +936,13 @@ def render_site(
             f" data-created=\"{h(item['created'])}\" data-search=\"{h(search_text.lower())}\" tabindex=\"0\">"
             f"<td><strong><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['id'])}</a></strong>"
             f"<div class=muted>{h(item['_path'])}</div></td>"
-            f"<td><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['title'])}</a>{in_flight_badge}</td>"
+            f"<td><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['title'])}</a></td>"
             f"<td>{h(item['type'])}</td><td>{h(item['area'])}</td>"
             f"<td>{h(item['priority'])}</td><td>{h(item['status'])}</td>"
             f"<td class=risk-cell><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
         )
     detail_cards = "".join(
-        item_detail(
-            item,
-            active=idx == 0,
-            github_repo=project["github_repo"],
-            today=today,
-            open_prs=item_prs.get(item["id"]),
-        )
+        item_detail(item, active=idx == 0, github_repo=project["github_repo"], today=today)
         for idx, item in enumerate(items)
     )
     detail_pane = (
@@ -1224,7 +1156,7 @@ document.documentElement.classList.add("js");
         + backlog_script
     )
     (out / "backlog.html").write_text(
-        page(name, "Backlog", backlog_body, active="backlog", has_prs=has_prs, generated_at=generated_at, css_version=css_version),
+        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version),
         encoding="utf-8",
     )
 
@@ -1298,40 +1230,9 @@ document.documentElement.classList.add("js");
 </script>
 """
     (out / "done.html").write_text(
-        page(name, "Done", done_body, active="done", has_prs=has_prs, generated_at=generated_at, css_version=css_version),
+        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version),
         encoding="utf-8",
     )
-
-    if has_prs:
-        matched_count = sum(1 for ids in pr_items.values() if ids)
-        pr_rows = []
-        for pr in sorted(prs, key=lambda p: (not pr_items.get(p["number"]), p["number"])):
-            state = "draft" if pr.get("isDraft") else "ready"
-            item_links = "".join(
-                f'<a class=pill href="backlog.html#{h(item_id)}">{h(item_id)}</a>'
-                for item_id in pr_items.get(pr["number"], [])
-            ) or '<span class=muted>—</span>'
-            pr_rows.append(
-                f"<tr><td><a href=\"{h(pr['url'])}\">#{h(pr['number'])}</a></td><td>{h(pr['title'])}</td>"
-                f"<td>{item_links}</td>"
-                f"<td><code>{h(pr['headRefName'])}</code> → <code>{h(pr['baseRefName'])}</code></td>"
-                f"<td>{h(state)}</td><td>{h(pr.get('updatedAt', ''))}</td></tr>"
-            )
-        pr_body = (
-            "<h1>Open PRs</h1>"
-            f"<p class=muted>{matched_count} of {len(prs)} open PRs reference backlog items"
-            " (via <code>links.prs</code> or an item id in the branch name / title).</p>"
-        )
-        if pr_error:
-            pr_body += f"<p class=warn>{h(pr_error)}</p>"
-        pr_body += (
-            "<table><thead><tr><th>PR</th><th>Title</th><th>Backlog items</th><th>Branch</th><th>State</th><th>Updated</th></tr></thead>"
-            "<tbody>" + "".join(pr_rows) + "</tbody></table>"
-        )
-        (out / "prs.html").write_text(
-            page(name, "PRs", pr_body, active="prs", has_prs=has_prs, generated_at=generated_at, css_version=css_version),
-            encoding="utf-8",
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1455,18 +1356,6 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     })
     assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done files must not be treated as items"
     assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
-
-    fake_prs = [
-        {"number": 7, "title": "Fix the sample", "headRefName": "fix/feat-20260703-sample-item", "url": "u7"},
-        {"number": 9, "title": "FEAT-20260703-sample-item follow-up", "headRefName": "chore/x", "url": "u9"},
-        {"number": 11, "title": "unrelated", "headRefName": "chore/y", "url": "u11"},
-        {"number": 12, "title": "linked explicitly", "headRefName": "chore/z", "url": "u12"},
-    ]
-    fake_items = [{"id": "FEAT-20260703-sample-item", "links": {"prs": [12, 999]}}]
-    item_prs, pr_items = match_prs(fake_items, fake_prs)
-    matched = [pr["number"] for pr in item_prs["FEAT-20260703-sample-item"]]
-    assert matched == [7, 9, 12], f"PR matching wrong: {matched}"
-    assert pr_items[7] == ["FEAT-20260703-sample-item"] and pr_items[11] == [], f"reverse PR map wrong: {pr_items}"
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
