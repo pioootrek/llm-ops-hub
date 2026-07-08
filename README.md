@@ -121,8 +121,10 @@ python3 bin/hub.py serve             # optional stdlib static server
 `build` validates everything first and **refuses to render an invalid
 backlog** - the previous release stays live. Output: `index.html`
 (dashboard), `backlog.html` (table + item cards), `done.html` (completed work
-grouped by month), optional `prs.html`, and `data/index.json` for agents
-(items + done + ref + commit + generated_at).
+grouped by month), optional `prs.html` (open PRs joined to backlog items via
+`links.prs` and item-id mentions in branch names/titles; matched items get an
+"in flight" badge in the backlog), and `data/index.json` for agents (items +
+done + PRs + feedback issues + ref + commit + generated_at).
 
 ## Configuration
 
@@ -137,7 +139,7 @@ to `config.json` for a local or deployment-specific instance.
 | `project.repo_url` | remote of the monitored repo (mirror source) | required |
 | `project.backlog_ref` | the single writable backlog branch | `main` |
 | `project.backlog_dir` | backlog path inside the repo | `docs/backlog` |
-| `project.github_repo` | `owner/repo` for the PRs page; omit to skip it (no `gh` needed) | unset |
+| `project.github_repo` | `owner/repo` for the PRs page, feedback buttons/issues, and PR↔item matching; omit to skip all of it (no `gh` needed) | unset |
 | `project.name` | display name in the rendered site | `Backlog` |
 | `paths.root` | runtime root | `~/winpath-hub` |
 | `paths.mirror` / `cache` / `releases` / `public` | each path individually overridable; `{root}` placeholder supported | `{root}/...` |
