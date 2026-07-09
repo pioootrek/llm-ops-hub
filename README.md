@@ -283,6 +283,11 @@ applies to this repo and to the template pack shipped to projects.
   when nothing changed since the last successful build (same commit, feedback
   issues, tool, and config — use `build --force` to override) and prunes old
   release directories down to `build.releases_keep`.
+- One deliberate exception to release immutability: `public/heartbeat.json`
+  is rewritten on every successful build attempt, skips included. The
+  rendered pages' staleness banner alarms when the heartbeat is old
+  (pipeline down or failing), never when the content is merely old — a
+  quiet backlog is not a failure.
 
 ## Status
 

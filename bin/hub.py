@@ -630,6 +630,20 @@ def prune_releases(releases_dir: Path, current: Path, keep: int) -> None:
             shutil.rmtree(old, ignore_errors=True)
 
 
+def write_heartbeat(public: Path, commit: str, result: str) -> None:
+    """The one mutable file inside the otherwise immutable live release.
+    Touched on every SUCCESSFUL build attempt - including no-op skips - it
+    proves the sync/build pipeline is alive; the staleness banner alarms on
+    heartbeat age, never on content age (a quiet backlog is not a failure)."""
+    heartbeat = {
+        "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "commit": commit,
+        "result": result,
+        "schema_version": 1,
+    }
+    (public / "heartbeat.json").write_text(canonical_json(heartbeat), encoding="utf-8")
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     cfg = load_hub_config(args.config)
     project = cfg["project"]
@@ -655,6 +669,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         and state_path.read_text(encoding="utf-8") == state_key
         and paths["public"].exists()
     ):
+        write_heartbeat(paths["public"], commit, "skipped")
         print(f"build: no changes at {project['backlog_ref']} ({commit[:10]}); keeping current release")
         return 0
 
@@ -686,6 +701,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         tmp_link.unlink()
     tmp_link.symlink_to(release, target_is_directory=True)
     os.replace(tmp_link, paths["public"])
+    write_heartbeat(paths["public"], commit, "rendered")
     state_path.write_text(state_key, encoding="utf-8")
     prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
     print(f"build: {len(items)} items at {project['backlog_ref']} ({commit[:10]}) -> {paths['public']}")
@@ -718,17 +734,34 @@ def paragraphs(values: list[str]) -> str:
 
 STALE_AFTER_MINUTES = 15
 
+# The banner alarms on heartbeat age (pipeline health), never on snapshot age:
+# a backlog with no commits for hours is healthy, a heartbeat that old is not.
+# heartbeat.json is rewritten by every successful build attempt, skips included.
 STALE_SCRIPT = """
 <script>
 (function () {
   const banner = document.getElementById("stale-banner");
-  const generated = Date.parse(banner ? banner.dataset.generatedAt : "");
-  if (!banner || !isFinite(generated)) return;
+  if (!banner) return;
   const limit = Number(banner.dataset.staleAfter);
-  function check() {
-    const minutes = Math.round((Date.now() - generated) / 60000);
-    if (minutes < limit) return;
-    banner.textContent = "This snapshot is " + minutes + " minutes old — sync or build may be failing.";
+  async function check() {
+    let checkedAt = NaN;
+    try {
+      const response = await fetch("heartbeat.json", { cache: "no-store" });
+      if (response.ok) checkedAt = Date.parse((await response.json()).checked_at);
+    } catch (error) {
+      /* no HTTP context or heartbeat missing - stay silent rather than false-alarm */
+    }
+    if (!isFinite(checkedAt)) {
+      banner.hidden = true;
+      return;
+    }
+    const minutes = Math.round((Date.now() - checkedAt) / 60000);
+    if (minutes < limit) {
+      banner.hidden = true;
+      return;
+    }
+    banner.textContent = "Last successful sync/build check was " + minutes
+      + " minutes ago — the pipeline may be down or failing.";
     banner.hidden = false;
   }
   check();
