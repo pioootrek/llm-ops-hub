@@ -593,6 +593,11 @@ def build_state_key(project: dict[str, Any], commit: str, github: dict[str, Any]
     })
 
 
+def fresh_enough_for_noop_skip(state_path: Path) -> bool:
+    age = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromtimestamp(state_path.stat().st_mtime, dt.timezone.utc)
+    return age < dt.timedelta(minutes=STALE_AFTER_MINUTES)
+
+
 def prune_releases(releases_dir: Path, current: Path, keep: int) -> None:
     if keep <= 0:
         return
@@ -626,6 +631,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         and state_path.is_file()
         and state_path.read_text(encoding="utf-8") == state_key
         and paths["public"].exists()
+        and fresh_enough_for_noop_skip(state_path)
     ):
         print(f"build: no changes at {project['backlog_ref']} ({commit[:10]}); keeping current release")
         return 0
