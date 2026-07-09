@@ -610,14 +610,15 @@ def build_state_key(project: dict[str, Any], commit: str, github: dict[str, Any]
     """Everything a release depends on: repo state, GitHub data, tool, project
     config. If this key is unchanged since the last successful build, rendering
     again would produce an identical release."""
-    tool = hashlib.sha256()
-    for path in [Path(__file__), BUNDLED_SCHEMA, BUNDLED_DONE_SCHEMA, BUNDLED_NOTE_SCHEMA]:
-        tool.update(path.read_bytes())
     return canonical_json({
         "commit": commit,
         "github": github,
         "project": project,
-        "tool": tool.hexdigest(),
+        "schemas": {
+            str(path.relative_to(TOOL_ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in [BUNDLED_SCHEMA, BUNDLED_DONE_SCHEMA, BUNDLED_NOTE_SCHEMA]
+        },
+        "tool": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     })
 
 
@@ -730,6 +731,15 @@ def h(value: Any) -> str:
 
 def paragraphs(values: list[str]) -> str:
     return "".join(f"<p>{h(p)}</p>" for p in values)
+
+
+def prose_values(item: dict[str, Any], key: str) -> list[str]:
+    """Prose fields the bundled schema requires but an override schema may
+    relax - tolerate them missing or malformed instead of crashing the build."""
+    values = item.get(key, [])
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values]
 
 
 STALE_AFTER_MINUTES = 15
@@ -1186,9 +1196,9 @@ def render_site(
                 item["status"],
                 item["risk"]["level"],
                 item["_path"],
-                *item.get("problem", []),
-                *item.get("value", []),
-                *item.get("scope", []),
+                *prose_values(item, "problem"),
+                *prose_values(item, "value"),
+                *prose_values(item, "scope"),
             ]
         )
         rows.append(
@@ -1649,6 +1659,13 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert not errors, f"valid item reported errors: {errors}"
     assert items[0]["id"] == "FEAT-20260703-sample-item"
 
+    relaxed = json.loads(good)
+    del relaxed["value"]
+    relaxed["scope"] = "not-a-list"
+    assert prose_values(relaxed, "value") == [], "missing prose field must yield empty search text"
+    assert prose_values(relaxed, "scope") == [], "malformed prose field must yield empty search text"
+    assert prose_values(relaxed, "problem") == ["Sample problem paragraph."]
+
     def expect_error(files: dict[str, str], needle: str) -> None:
         _, errs = validate_items(_MemorySource(files), schema, {})
         assert any(needle in e for e in errs), f"expected error containing {needle!r}, got {errs}"
@@ -1784,6 +1801,13 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "the issue body is a producer/consumer contract - agents parse it per "
         "templates/AGENTS.md, so change both together"
     )
+
+    state_key = parse_json("state-key", build_state_key({"name": "x"}, "abc123", {"issues": [], "issue_error": None}))
+    assert set(state_key["schemas"]) == {
+        "schema/backlog-item.schema.json",
+        "schema/done-entry.schema.json",
+        "schema/note.schema.json",
+    }, "build state key must include bundled schema hashes"
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
