@@ -2,7 +2,7 @@
   "$id": "note.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": true,
-  "description": "One agent note: durable findings written by LLM agents for LLM agents (audit results, discovered bugs, gotchas). Only this envelope is fixed - body accepts any JSON value and extra top-level fields are allowed, so each agent structures its memory as it sees fit. Humans only browse, search, archive, or delete. Canonical serialization applies. Filename must be notes/<id>.json.",
+  "description": "Manifest of one agent note: durable findings written by LLM agents for LLM agents (audit results, discovered bugs, gotchas). A note is a directory notes/<id>/ holding this manifest as note.json plus any free-form payload files (markdown, JSON, images, ...). Only the manifest is validated and canonicalized; body accepts any JSON value, extra top-level fields are allowed, payload files are never rewritten. Humans only browse, search, archive, or delete.",
   "properties": {
     "author": {
       "minLength": 1,
@@ -46,8 +46,7 @@
     "title",
     "created",
     "author",
-    "status",
-    "body"
+    "status"
   ],
   "title": "Agent note",
   "type": "object"

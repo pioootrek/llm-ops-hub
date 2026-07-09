@@ -49,6 +49,11 @@ PROJECT_NOTE_SCHEMA_FILE = "note-schema.json"
 PROJECT_CONFIG_FILE = "config.json"
 DONE_SUBDIR = "done"
 NOTES_SUBDIR = "notes"
+NOTE_MANIFEST = "note.json"
+NOTE_TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".log"}
+NOTE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+ALLOWED_NOTE_FILE_SUFFIXES = NOTE_TEXT_SUFFIXES | NOTE_IMAGE_SUFFIXES
+MAX_NOTE_FILE_BYTES = 5 * 1024 * 1024
 
 
 class ContractError(Exception):
@@ -151,12 +156,18 @@ class WorktreeSource:
     def list_files(self) -> list[str]:
         return sorted(
             str(p.relative_to(self.backlog_dir))
-            for p in self.backlog_dir.rglob("*.json")
-            if p.is_file()
+            for p in self.backlog_dir.rglob("*")
+            if p.is_file() and not p.name.startswith(".")
         )
 
     def read(self, rel_path: str) -> str:
         return (self.backlog_dir / rel_path).read_text(encoding="utf-8")
+
+    def read_bytes(self, rel_path: str) -> bytes:
+        return (self.backlog_dir / rel_path).read_bytes()
+
+    def size(self, rel_path: str) -> int:
+        return (self.backlog_dir / rel_path).stat().st_size
 
 
 class MirrorSource:
@@ -182,7 +193,7 @@ class MirrorSource:
         return sorted(
             p[len(prefix):]
             for p in result.stdout.splitlines()
-            if p.startswith(prefix) and p.endswith(".json")
+            if p.startswith(prefix)
         )
 
     def read(self, rel_path: str) -> str:
@@ -190,6 +201,21 @@ class MirrorSource:
         if result.returncode != 0:
             raise ContractError(f"could not read {rel_path} at {self.ref}")
         return result.stdout
+
+    def read_bytes(self, rel_path: str) -> bytes:
+        result = subprocess.run(
+            ["git", f"--git-dir={self.mirror}", "show", f"{self.ref}:{self.backlog_dir}/{rel_path}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if result.returncode != 0:
+            raise ContractError(f"could not read {rel_path} at {self.ref}")
+        return result.stdout
+
+    def size(self, rel_path: str) -> int:
+        result = run(["git", f"--git-dir={self.mirror}", "cat-file", "-s", f"{self.ref}:{self.backlog_dir}/{rel_path}"])
+        if result.returncode != 0:
+            raise ContractError(f"could not stat {rel_path} at {self.ref}")
+        return int(result.stdout.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -228,18 +254,24 @@ def item_files(source) -> list[str]:
     reserved = {INDEX_FILE, PROJECT_SCHEMA_FILE, PROJECT_DONE_SCHEMA_FILE, PROJECT_NOTE_SCHEMA_FILE, PROJECT_CONFIG_FILE}
     return [
         p for p in source.list_files()
-        if p not in reserved
+        if p.endswith(".json")
+        and p not in reserved
         and not p.startswith(DONE_SUBDIR + "/")
         and not p.startswith(NOTES_SUBDIR + "/")
     ]
 
 
 def done_files(source) -> list[str]:
-    return [p for p in source.list_files() if p.startswith(DONE_SUBDIR + "/")]
+    return [p for p in source.list_files() if p.startswith(DONE_SUBDIR + "/") and p.endswith(".json")]
 
 
 def note_files(source) -> list[str]:
+    """Everything under notes/ - manifests and free-form payload files alike."""
     return [p for p in source.list_files() if p.startswith(NOTES_SUBDIR + "/")]
+
+
+def note_manifest_files(source) -> list[str]:
+    return [p for p in note_files(source) if p.count("/") == 2 and p.endswith("/" + NOTE_MANIFEST)]
 
 
 def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -335,17 +367,45 @@ def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str
 
 
 def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Returns (agent notes newest first, error messages). Only the envelope
-    is validated - note content belongs to the agents."""
+    """Returns (agent notes newest first, error messages). A note is a
+    directory notes/<id>/ holding a validated note.json manifest plus
+    free-form payload files - only the manifest and the payload envelope
+    (allowed types, size) are checked; content belongs to the agents."""
     validator = jsonschema.Draft202012Validator(schema)
     errors: list[str] = []
     notes: list[dict[str, Any]] = []
-    seen_ids: dict[str, str] = {}
+    by_dir: dict[str, list[str]] = {}
 
     for rel_path in note_files(source):
-        label = f"{source.label}/{rel_path}"
+        parts = rel_path.split("/")
+        if len(parts) < 3:
+            errors.append(
+                f"{source.label}/{rel_path}: notes are directories - "
+                f"expected {NOTES_SUBDIR}/<note-id>/{NOTE_MANIFEST} plus free-form files"
+            )
+            continue
+        by_dir.setdefault(parts[1], []).append("/".join(parts[2:]))
+
+    for note_dir, files in sorted(by_dir.items()):
+        dir_label = f"{source.label}/{NOTES_SUBDIR}/{note_dir}"
+        payload = sorted(f for f in files if f != NOTE_MANIFEST)
+
+        for rel_file in payload:
+            file_rel = f"{NOTES_SUBDIR}/{note_dir}/{rel_file}"
+            suffix = Path(rel_file).suffix.lower()
+            if suffix not in ALLOWED_NOTE_FILE_SUFFIXES:
+                allowed = " ".join(sorted(ALLOWED_NOTE_FILE_SUFFIXES))
+                errors.append(f"{source.label}/{file_rel}: file type {suffix or '(none)'} not allowed in notes (allowed: {allowed})")
+            elif source.size(file_rel) > MAX_NOTE_FILE_BYTES:
+                errors.append(f"{source.label}/{file_rel}: exceeds the {MAX_NOTE_FILE_BYTES // (1024 * 1024)} MB note file limit")
+
+        if NOTE_MANIFEST not in files:
+            errors.append(f"{dir_label}: missing {NOTE_MANIFEST} manifest")
+            continue
+        manifest_rel = f"{NOTES_SUBDIR}/{note_dir}/{NOTE_MANIFEST}"
+        label = f"{source.label}/{manifest_rel}"
         try:
-            raw = source.read(rel_path)
+            raw = source.read(manifest_rel)
             data = parse_json(label, raw)
         except ContractError as exc:
             errors.append(str(exc))
@@ -359,27 +419,22 @@ def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]]
             continue
 
         note_id = data["id"]
-        expected_rel = f"{NOTES_SUBDIR}/{note_id}.json"
-        if rel_path != expected_rel:
-            errors.append(f"{label}: file must be at {expected_rel} (id defines the path)")
+        if note_id != note_dir:
+            errors.append(f"{label}: id {note_id} must match the directory name {note_dir}")
         if note_id[5:13] != data["created"].replace("-", ""):
             errors.append(f"{label}: id date part must match created {data['created']}")
-        if note_id in seen_ids:
-            errors.append(f"{label}: duplicate id {note_id} (also in {seen_ids[note_id]})")
-        else:
-            seen_ids[note_id] = rel_path
-
         if raw != canonical_json(data):
             errors.append(f"{label}: not in canonical form (run: hub.py fmt)")
 
-        data["_path"] = rel_path
+        data["_path"] = f"{NOTES_SUBDIR}/{note_dir}"
+        data["_files"] = payload
         notes.append(data)
 
     notes.sort(key=lambda n: (n["created"], n["id"]), reverse=True)
     return notes, errors
 
 
-def build_index(items: list[dict[str, Any]]) -> dict[str, Any]:
+def build_index(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated_by": "hub.py fmt",
         "items": [
@@ -395,12 +450,25 @@ def build_index(items: list[dict[str, Any]]) -> dict[str, Any]:
             }
             for i in items
         ],
+        "notes": [
+            {
+                "author": n["author"],
+                "created": n["created"],
+                "files": n["_files"],
+                "id": n["id"],
+                "path": n["_path"],
+                "status": n["status"],
+                "tags": n.get("tags", []),
+                "title": n["title"],
+            }
+            for n in notes
+        ],
         "schema_version": 1,
     }
 
 
-def validate_index(source, items: list[dict[str, Any]]) -> list[str]:
-    expected = canonical_json(build_index(items))
+def validate_index(source, items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> list[str]:
+    expected = canonical_json(build_index(items, notes))
     if INDEX_FILE not in source.list_files():
         return [f"{source.label}/{INDEX_FILE}: missing (run: hub.py fmt)"]
     if source.read(INDEX_FILE) != expected:
@@ -421,7 +489,9 @@ def _worktree(backlog_dir: str) -> WorktreeSource:
 def cmd_fmt(args: argparse.Namespace) -> int:
     source = _worktree(args.backlog_dir)
     changed = 0
-    for rel_path in item_files(source) + done_files(source) + note_files(source):
+    # Only manifests are canonicalized under notes/ - payload files (even
+    # .json ones) are the agents' own format and are never rewritten.
+    for rel_path in item_files(source) + done_files(source) + note_manifest_files(source):
         label = f"{source.label}/{rel_path}"
         raw = source.read(rel_path)
         formatted = canonical_json(parse_json(label, raw))
@@ -435,7 +505,7 @@ def cmd_fmt(args: argparse.Namespace) -> int:
     items, errors = validate_items(source, schema, project_cfg)
     _, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
-    _, note_errors = validate_notes(source, load_note_schema(source))
+    notes, note_errors = validate_notes(source, load_note_schema(source))
     errors += note_errors
     if errors:
         for error in errors:
@@ -443,7 +513,7 @@ def cmd_fmt(args: argparse.Namespace) -> int:
         print("fmt: canonicalized files, but contract errors remain (see above)", file=sys.stderr)
         return 2
 
-    index_text = canonical_json(build_index(items))
+    index_text = canonical_json(build_index(items, notes))
     index_path = source.backlog_dir / INDEX_FILE
     if not index_path.exists() or index_path.read_text(encoding="utf-8") != index_text:
         index_path.write_text(index_text, encoding="utf-8")
@@ -461,7 +531,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     errors += done_errors
     notes, note_errors = validate_notes(source, load_note_schema(source))
     errors += note_errors
-    errors += validate_index(source, items)
+    errors += validate_index(source, items, notes)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -567,7 +637,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     errors += done_errors
     notes, note_errors = validate_notes(source, load_note_schema(source))
     errors += note_errors
-    errors += validate_index(source, items)
+    errors += validate_index(source, items, notes)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -581,7 +651,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if release.exists():
         release = paths["releases"] / f"{stamp}-{os.getpid()}"
 
-    render_site(cfg, items, done_entries, notes, commit, github, release)
+    render_site(cfg, source, items, done_entries, notes, commit, github, release)
 
     tmp_link = paths["root"] / "public.next"
     if tmp_link.exists() or tmp_link.is_symlink():
@@ -743,6 +813,7 @@ CSS = (
     '.item-detail{scroll-margin-top:92px}.item-detail h3{border-top:1px solid var(--border);padding-top:12px}'
     '.note-human{border-left:3px solid var(--ring);padding-left:9px;font-size:13px}'
     '.item-actions{display:flex;gap:6px;flex-wrap:wrap}'
+    '.note-image{max-width:100%;border:1px solid var(--border);border-radius:6px}'
     '.js .item-detail{display:none}.js .item-detail.active{display:block}'
     'table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:transparent}'
     'th,td{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}'
@@ -856,15 +927,33 @@ def item_detail(
     )
 
 
-NOTE_ENVELOPE_KEYS = {"schema_version", "id", "title", "created", "author", "status", "tags", "body", "_path"}
+NOTE_ENVELOPE_KEYS = {"schema_version", "id", "title", "created", "author", "status", "tags", "body", "_path", "_files"}
+NOTE_RENDER_TEXT_LIMIT = 20000
 
 
-def note_detail(note: dict[str, Any], *, github_repo: str | None = None) -> str:
-    body = note["body"]
-    content = f"<pre>{h(body if isinstance(body, str) else canonical_json(body))}</pre>"
+def note_detail(note: dict[str, Any], *, source, github_repo: str | None = None) -> str:
+    content = ""
+    search_parts = [canonical_json({k: v for k, v in note.items() if not k.startswith("_")})]
+    if "body" in note:
+        body = note["body"]
+        content += f"<pre>{h(body if isinstance(body, str) else canonical_json(body))}</pre>"
     extras = {k: v for k, v in note.items() if k not in NOTE_ENVELOPE_KEYS}
     if extras:
         content += f"<h3>extra fields</h3><pre>{h(canonical_json(extras))}</pre>"
+    for rel_file in note["_files"]:
+        file_rel = f"{note['_path']}/{rel_file}"
+        search_parts.append(rel_file)
+        if Path(rel_file).suffix.lower() in NOTE_IMAGE_SUFFIXES:
+            content += (
+                f"<h3>{h(rel_file)}</h3>"
+                f'<p><img class=note-image src="{h(file_rel)}" alt="{h(rel_file)}" loading=lazy></p>'
+            )
+            continue
+        text = source.read_bytes(file_rel).decode("utf-8", errors="replace")
+        search_parts.append(text)
+        content += f"<h3>{h(rel_file)}</h3><pre>{h(text[:NOTE_RENDER_TEXT_LIMIT])}</pre>"
+        if len(text) > NOTE_RENDER_TEXT_LIMIT:
+            content += f'<p class=muted>truncated — <a href="{h(file_rel)}">full file</a></p>'
     if github_repo:
         content += "<h3>manage</h3><p class=item-actions>" + "".join(
             f'<a class=button href="{h(feedback_issue_url(github_repo, note["id"], action, hint))}">{h(label)}</a>'
@@ -877,7 +966,7 @@ def note_detail(note: dict[str, Any], *, github_repo: str | None = None) -> str:
         f"<span class=pill>{h(value)}</span>"
         for value in [note["created"], note["author"], note["status"], *note.get("tags", [])]
     )
-    search = canonical_json({k: v for k, v in note.items() if k != "_path"}).lower()
+    search = " ".join(search_parts).lower()
     return (
         f'<article class="card note-entry" data-status="{h(note["status"])}" data-note-search="{h(search)}">'
         f"<h2>{h(note['id'])} · {h(note['title'])}</h2><div class=\"meta\">{meta}</div>{content}</article>"
@@ -923,6 +1012,7 @@ def done_detail(entry: dict[str, Any]) -> str:
 
 def render_site(
     cfg: dict[str, Any],
+    source,
     items: list[dict[str, Any]],
     done_entries: list[dict[str, Any]],
     notes: list[dict[str, Any]],
@@ -1266,6 +1356,13 @@ document.documentElement.classList.add("js");
         encoding="utf-8",
     )
 
+    for note in notes:
+        for rel_file in note["_files"]:
+            file_rel = f"{note['_path']}/{rel_file}"
+            dest = out / file_rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(source.read_bytes(file_rel))
+
     note_status_options = (
         '<option value="">Active</option><option value=archived>Archived</option><option value=all>All</option>'
     )
@@ -1278,7 +1375,7 @@ document.documentElement.classList.add("js");
         f'<div class=control><label for=note-status>Status</label><select id=note-status>{note_status_options}</select></div>'
         '<div class=toolbar-actions><button class=button id=clear-note-search type=button>Reset</button></div></form>'
         '<div class=empty-state id=note-empty-state hidden>No matching notes.</div>'
-        + "".join(note_detail(note, github_repo=project["github_repo"]) for note in notes)
+        + "".join(note_detail(note, source=source, github_repo=project["github_repo"]) for note in notes)
         + ("<p class=muted>No notes yet.</p>" if not notes else "")
         + """
 <script>
@@ -1452,7 +1549,7 @@ SAMPLE_DONE = {
 
 
 class _MemorySource:
-    def __init__(self, files: dict[str, str]):
+    def __init__(self, files: dict[str, Any]):
         self.files = files
         self.label = "memory"
 
@@ -1461,6 +1558,13 @@ class _MemorySource:
 
     def read(self, rel_path: str) -> str:
         return self.files[rel_path]
+
+    def read_bytes(self, rel_path: str) -> bytes:
+        value = self.files[rel_path]
+        return value if isinstance(value, bytes) else value.encode("utf-8")
+
+    def size(self, rel_path: str) -> int:
+        return len(self.read_bytes(rel_path))
 
 
 def cmd_self_test(_args: argparse.Namespace) -> int:
@@ -1506,7 +1610,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     bad["notes"][0]["author"] = ""
     expect_error({"feature/FEAT-20260703-sample-item.json": canonical_json(bad)}, "author")
 
-    index_errors = validate_index(_MemorySource({"feature/FEAT-20260703-sample-item.json": good}), items)
+    index_errors = validate_index(_MemorySource({"feature/FEAT-20260703-sample-item.json": good}), items, [])
     assert index_errors and "missing" in index_errors[0], "missing index must be reported"
 
     done_schema = parse_json(str(BUNDLED_DONE_SCHEMA), BUNDLED_DONE_SCHEMA.read_text(encoding="utf-8"))
@@ -1530,37 +1634,63 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     note_schema = parse_json(str(BUNDLED_NOTE_SCHEMA), BUNDLED_NOTE_SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(note_schema)
     good_note = canonical_json(SAMPLE_NOTE)
+    note_dir = "notes/NOTE-20260703-sample-finding"
 
-    parsed_notes, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": good_note}), note_schema)
-    assert not errs, f"valid note (with extra field + object body) reported errors: {errs}"
+    parsed_notes, errs = validate_notes(_MemorySource({
+        f"{note_dir}/note.json": good_note,
+        f"{note_dir}/findings.md": "# Findings\n\nFree-form markdown payload.",
+        f"{note_dir}/shot.png": b"\x89PNG fake image bytes",
+    }), note_schema)
+    assert not errs, f"valid note dir reported errors: {errs}"
     assert parsed_notes[0]["id"] == "NOTE-20260703-sample-finding"
+    assert parsed_notes[0]["_files"] == ["findings.md", "shot.png"], f"payload listing wrong: {parsed_notes[0]['_files']}"
 
-    bad_note = json.loads(good_note)
-    bad_note["body"] = "free-form text is fine too"
-    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": canonical_json(bad_note)}), note_schema)
-    assert not errs, f"string body must be allowed: {errs}"
+    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-wrong-dir/note.json": good_note}), note_schema)
+    assert any("must match the directory name" in e for e in errs), f"note id/dir rule not enforced: {errs}"
 
-    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-wrong-name.json": good_note}), note_schema)
-    assert any("file must be at" in e for e in errs), f"note path rule not enforced: {errs}"
+    _, errs = validate_notes(_MemorySource({f"{note_dir}/findings.md": "orphan payload"}), note_schema)
+    assert any("missing note.json" in e for e in errs), f"missing manifest not reported: {errs}"
+
+    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-loose.json": good_note}), note_schema)
+    assert any("notes are directories" in e for e in errs), f"loose file under notes/ not reported: {errs}"
+
+    _, errs = validate_notes(_MemorySource({
+        f"{note_dir}/note.json": good_note,
+        f"{note_dir}/payload.exe": b"nope",
+    }), note_schema)
+    assert any("not allowed in notes" in e for e in errs), f"extension allowlist not enforced: {errs}"
+
+    _, errs = validate_notes(_MemorySource({
+        f"{note_dir}/note.json": good_note,
+        f"{note_dir}/huge.log": b"x" * (MAX_NOTE_FILE_BYTES + 1),
+    }), note_schema)
+    assert any("MB note file limit" in e for e in errs), f"size limit not enforced: {errs}"
 
     bad_note = json.loads(good_note)
     bad_note["created"] = "2026-07-04"
-    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": canonical_json(bad_note)}), note_schema)
+    _, errs = validate_notes(_MemorySource({f"{note_dir}/note.json": canonical_json(bad_note)}), note_schema)
     assert any("date part" in e for e in errs), f"note id/created rule not enforced: {errs}"
 
     bad_note = json.loads(good_note)
     del bad_note["author"]
-    _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-sample-finding.json": canonical_json(bad_note)}), note_schema)
+    _, errs = validate_notes(_MemorySource({f"{note_dir}/note.json": canonical_json(bad_note)}), note_schema)
     assert any("author" in e for e in errs), f"note author requirement not enforced: {errs}"
+
+    index = build_index(items, parsed_notes)
+    assert index["notes"][0]["files"] == ["findings.md", "shot.png"], "index must list note payload files"
+    assert index["notes"][0]["path"] == note_dir, "index must carry the note directory path"
 
     mixed = _MemorySource({
         "feature/FEAT-20260703-sample-item.json": good,
+        "AGENTS.md": "top-level docs are ignored",
         "done/DONE-20260703-sample-entry.json": good_done,
-        "notes/NOTE-20260703-sample-finding.json": good_note,
+        f"{note_dir}/note.json": good_note,
+        f"{note_dir}/findings.md": "payload",
     })
-    assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done/note files must not be treated as items"
+    assert item_files(mixed) == ["feature/FEAT-20260703-sample-item.json"], "done/note/doc files must not be treated as items"
     assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
-    assert note_files(mixed) == ["notes/NOTE-20260703-sample-finding.json"]
+    assert note_files(mixed) == [f"{note_dir}/findings.md", f"{note_dir}/note.json"]
+    assert note_manifest_files(mixed) == [f"{note_dir}/note.json"]
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"

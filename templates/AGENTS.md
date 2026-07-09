@@ -30,7 +30,8 @@ docs/backlog/
   rework/           <- restructuring of working behavior: refactor, perf, debt
   security/         <- isolation, hardening, auth, supply chain, security process
   done/             <- completed-work records, one file per outcome
-  notes/            <- agent notes: durable findings, shared memory across sessions and models
+  notes/            <- agent notes: one DIRECTORY per note (note.json manifest
+                       + free-form files), shared memory across sessions and models
 ```
 
 ## The one workflow rule
@@ -116,7 +117,7 @@ archive.
 | Finished work with no backlog item | Add a done entry without `item_id` |
 | An obsolete/wrong item | Delete the file + add a short done entry saying it was dropped and why |
 | An item to keep but not plan | Set `status: archived` + a dated note saying why |
-| A durable finding (audit result, bug spotted in passing, gotcha) | Add `notes/NOTE-<date>-<slug>.json` - see "Agent notes" |
+| A durable finding (audit result, bug spotted in passing, gotcha) | Add `notes/NOTE-<date>-<slug>/note.json` (+ any files) - see "Agent notes" |
 | A decision needing human approval | Keep a `notes` entry `Decision state: proposed`; never mark approved yourself |
 
 The backlog holds OPEN work only. Completed history lives in `done/` and git,
@@ -131,26 +132,40 @@ future session (yours or another agent's) would otherwise have to rediscover.
 Humans only browse, search, archive, or delete notes in the hub; they will
 not maintain them.
 
-- One note = one file `notes/NOTE-YYYYMMDD-slug.json`, same fmt+validate
-  workflow as items.
-- Fixed envelope: `schema_version` (1), `id`, `title` (make it scannable -
-  it is how others decide whether to open the note), `created` (must match
-  the id date), `author` (`agent:<model-or-session>`), `status`
-  (`active|archived`), `body`. **`body` is any JSON** - a string, a list, an
-  object - and extra top-level fields are allowed: structure your memory
-  however serves you best. Nobody will normalize your format.
+One note = one directory, so a note can hold whatever you need:
+
+```
+notes/NOTE-20260705-auth-audit/
+  note.json      <- the manifest: the only validated, canonicalized file
+  findings.md    <- everything else is yours: any files, any structure
+  session-flow.md
+  login-bug.png
+```
+
+- Manifest (`note.json`): `schema_version` (1), `id` (must equal the
+  directory name), `title` (make it scannable - it is how others decide
+  whether to open the note), `created` (must match the id date), `author`
+  (`agent:<model-or-session>`), `status` (`active|archived`), optional
+  `tags`, optional inline `body` (any JSON - enough for a quick one-file
+  note). Extra top-level fields are allowed.
+- Payload files are free-form and never rewritten by `fmt` - markdown is
+  usually the best choice for prose (greppable, diffable). Allowed types:
+  `.md .txt .json .csv .log .png .jpg .jpeg .gif .webp`, max 5 MB each.
+  Screenshots: crop to the relevant region and compress before committing -
+  git keeps history forever.
+- Discovery is cheap: `index.json` lists every note (id, title, tags,
+  status, author, files). Scan the index first, then read only the files
+  you need from the notes that look relevant. When compacting your context,
+  persist what matters as a note first.
 - Write a note when you learn something durable. Do not log routine work
   here - finished work goes to `done/`, item-specific updates go to that
   item's `notes[]` field. (Those inline entries are comments on one item;
-  `notes/` files stand alone.)
-- Before starting non-trivial work, scan active notes (`notes/*.json`,
-  filter `status == "active"`) and read the ones whose titles or tags look
-  relevant. When compacting your context, persist what matters as a note
-  first.
+  `notes/` directories stand alone.)
 - Prefer updating your own earlier note over stacking near-duplicates; set
   `status: archived` when a note stops being true (delete only when it was
   wrong from the start).
-- Never put secrets or credentials in notes - the hub renders them.
+- Never put secrets or credentials in notes - the hub renders them,
+  images included.
 
 ## Hub feedback issues
 
@@ -179,8 +194,9 @@ instead of weakening the contract.
 
 ## How to query (for agents)
 
-- All fields are in the JSON records; `index.json` is the fast scan surface
-  (id, title, type, area, status, priority, risk_level, path).
+- All fields are in the JSON records; `index.json` is the fast scan surface:
+  `items` (id, title, type, area, status, priority, risk_level, path) and
+  `notes` (id, title, tags, status, author, created, files, path).
 - Open security work: read `security/*.json`.
 - High-risk work: filter `risk.level == "high"`.
 - Pick next work: `status == "open"` and `priority == "now"`, then `next`;

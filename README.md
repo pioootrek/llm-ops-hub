@@ -83,17 +83,30 @@ the rendered site, not on disk.
 
 ## Agent notes
 
-The third record type is memory for the agents themselves:
-`notes/NOTE-YYYYMMDD-slug.json`. When an agent runs an audit, finds a bug in
-passing, or reverse-engineers a gotcha, it persists the finding as a note so
-the knowledge survives context compaction and is shared across sessions and
-across different models. Only a small envelope is fixed (id, title, created,
-author, status `active|archived`, body); **`body` accepts any JSON and extra
-top-level fields are allowed** - each agent structures its memory however it
-wants (bundled schema: `schema/note.schema.json`, project-overridable via
-`note-schema.json`). Notes serve the LLM, not the human: the hub renders
-them on a `notes.html` page where humans can browse, full-text search, and -
-via the feedback loop - archive or delete them, nothing more.
+The third record type is memory for the agents themselves. When an agent
+runs an audit, finds a bug in passing, or reverse-engineers a gotcha, it
+persists the finding as a note so the knowledge survives context compaction
+and is shared across sessions and across different models. One note is one
+**directory**:
+
+```
+notes/NOTE-20260705-auth-audit/
+  note.json      <- manifest: the only validated, canonicalized file
+  findings.md    <- everything else is free-form: markdown, JSON, images...
+  login-bug.png
+```
+
+The manifest pins the envelope (id == directory name, title, created,
+author, status `active|archived`, optional tags and inline body; extra
+fields allowed - bundled schema `schema/note.schema.json`, overridable via
+`note-schema.json`). Payload files are the agent's own format and are never
+rewritten by `fmt`; allowed types are text (`md txt json csv log`) and
+images (`png jpg jpeg gif webp`), max 5 MB each. `index.json` lists every
+note (id, title, tags, status, files), so agents discover relevant memory
+with a single cheap read instead of scanning every file. Notes serve the
+LLM, not the human: the hub renders them on `notes.html` (text inline,
+images inline, full-text search) where humans can browse and - via the
+feedback loop - archive or delete them, nothing more.
 
 ## Human feedback
 
@@ -171,8 +184,9 @@ closing backlog items. The short version:
   and add a `done/` entry (see the guide).
 - Durable findings (audit results, bugs spotted in passing, gotchas) belong
   in `docs/backlog/notes/` as agent notes - shared memory across sessions
-  and models, any structure you like inside the envelope. Scan active notes
-  before starting non-trivial work; persist what matters before compacting.
+  and models. One note = one directory (`note.json` manifest + any files:
+  markdown, JSON, screenshots). Check `index.json` for relevant notes before
+  starting non-trivial work; persist what matters before compacting.
 - Open GitHub issues labeled `backlog-feedback` are human instructions for
   the backlog - apply them as described in the guide, then close them.
 ```
