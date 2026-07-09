@@ -1064,19 +1064,20 @@ def render_site(
     (out / "data/index.json").write_text(canonical_json(index_data), encoding="utf-8")
     (cfg["paths"]["cache"] / "index.json").write_text(canonical_json(index_data), encoding="utf-8")
 
+    active_items = [i for i in items if i["status"] != "archived"]
+    archived_count = len(items) - len(active_items)
     by_status: dict[str, int] = {}
-    by_priority: dict[str, int] = {}
-    high_risk = 0
     for item in items:
         by_status[item["status"]] = by_status.get(item["status"], 0) + 1
+    by_priority: dict[str, int] = {}
+    high_risk = 0
+    for item in active_items:
         by_priority[item["priority"]] = by_priority.get(item["priority"], 0) + 1
         high_risk += item["risk"]["level"] == "high"
 
     def pills(counter: dict[str, int]) -> str:
         return "".join(f"<span class=pill>{h(k)}: {v}</span>" for k, v in sorted(counter.items()))
 
-    active_items = [i for i in items if i["status"] != "archived"]
-    archived_count = len(items) - len(active_items)
     latest_done = f"latest: {h(done_entries[0]['date'])}" if done_entries else "no entries yet"
     home = [
         card("Backlog", f"<p>{len(active_items)} active items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p><p><a href=backlog.html>Open backlog →</a></p>"),
