@@ -192,10 +192,11 @@ closing backlog items. The short version:
 ```
 
 Reword freely; the load-bearing parts are the pointer to
-`docs/backlog/AGENTS.md`, the fmt+validate rule, and the `backlog-feedback`
-bullet (drop that one if the project is not on GitHub). If the project
-follows the `AGENTS.md`-plus-`CLAUDE.md`-include convention, the snippet goes
-into `AGENTS.md` only.
+`docs/backlog/AGENTS.md`, the fmt+validate rule, the agent-notes bullet
+(without it agents never use their shared memory), and the
+`backlog-feedback` bullet (drop that one if the project is not on GitHub).
+If the project follows the `AGENTS.md`-plus-`CLAUDE.md`-include convention,
+the snippet goes into `AGENTS.md` only.
 
 ### 3. Stand up the hub worker
 
