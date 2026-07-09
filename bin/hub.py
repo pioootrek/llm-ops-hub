@@ -698,6 +698,13 @@ def paragraphs(values: list[str]) -> str:
     return "".join(f"<p>{h(p)}</p>" for p in values)
 
 
+def prose_values(item: dict[str, Any], key: str) -> list[str]:
+    values = item.get(key, [])
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values]
+
+
 STALE_AFTER_MINUTES = 15
 
 STALE_SCRIPT = """
@@ -1129,9 +1136,9 @@ def render_site(
                 item["status"],
                 item["risk"]["level"],
                 item["_path"],
-                *item["problem"],
-                *item["value"],
-                *item["scope"],
+                *prose_values(item, "problem"),
+                *prose_values(item, "value"),
+                *prose_values(item, "scope"),
             ]
         )
         rows.append(
@@ -1588,6 +1595,11 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     items, errors = validate_items(source, schema, {})
     assert not errors, f"valid item reported errors: {errors}"
     assert items[0]["id"] == "FEAT-20260703-sample-item"
+
+    relaxed = json.loads(good)
+    del relaxed["value"]
+    del relaxed["scope"]
+    assert prose_values(relaxed, "value") == [], "missing optional prose fields must render as empty search text"
 
     def expect_error(files: dict[str, str], needle: str) -> None:
         _, errs = validate_items(_MemorySource(files), schema, {})
