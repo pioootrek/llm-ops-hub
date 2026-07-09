@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -1714,6 +1715,30 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
     assert note_files(mixed) == [f"{note_dir}/findings.md", f"{note_dir}/note.json"]
     assert note_manifest_files(mixed) == [f"{note_dir}/note.json"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        backlog = Path(tmp)
+        (backlog / "notes" / "NOTE-20260703-sample-finding").mkdir(parents=True)
+        (backlog / "notes" / "NOTE-20260703-sample-finding" / ".gitkeep").write_text("", encoding="utf-8")
+        assert WorktreeSource(backlog).list_files() == [
+            "notes/NOTE-20260703-sample-finding/.gitkeep"
+        ], "worktree validation must see committed dotfiles like the mirror does"
+
+        fresh_state = backlog / "last_build.json"
+        fresh_state.write_text("state", encoding="utf-8")
+        assert fresh_enough_for_noop_skip(fresh_state), "new build state should allow no-op skip"
+        old_time = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=STALE_AFTER_MINUTES + 1)
+        ).timestamp()
+        os.utime(fresh_state, (old_time, old_time))
+        assert not fresh_enough_for_noop_skip(fresh_state), "stale build state must force a heartbeat render"
+
+    state_key = parse_json("state-key", build_state_key({"name": "x"}, "abc123", {"issues": [], "issue_error": None}))
+    assert set(state_key["schemas"]) == {
+        "schema/backlog-item.schema.json",
+        "schema/done-entry.schema.json",
+        "schema/note.schema.json",
+    }, "build state key must include bundled schema hashes"
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
