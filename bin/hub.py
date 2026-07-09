@@ -589,6 +589,10 @@ def build_state_key(project: dict[str, Any], commit: str, github: dict[str, Any]
         "commit": commit,
         "github": github,
         "project": project,
+        "schemas": {
+            str(path.relative_to(TOOL_ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in [BUNDLED_SCHEMA, BUNDLED_DONE_SCHEMA, BUNDLED_NOTE_SCHEMA]
+        },
         "tool": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     })
 
