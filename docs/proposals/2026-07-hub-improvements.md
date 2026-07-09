@@ -12,6 +12,17 @@ Goal: a human browsing the hub can (a) leave guidance for agents on an item,
 (b) change an item's priority, (c) archive an item — without the hub growing
 a write path.
 
+> **Decision (2026-07-09): the issue mechanism below is final.** Considered
+> and rejected after implementation: GitHub Issues as the backlog's source
+> of truth (loses the schema contract, commit atomicity with code, cheap
+> token-free agent access, and agent-notes payloads; makes GitHub the hub);
+> browser edits of item JSON via an auto-fmt bot (moves complexity into
+> project CI, bot commits, raw-JSON editing by humans); a `hub.py guidance`
+> CLI doing an ephemeral clone (viable and invariant-clean, but not worth a
+> third write transport while direct commits and issues cover both cases).
+> Files in git stay the only database; issues stay a transient inbox, closed
+> once applied. Humans with a checkout should just edit `notes[]` directly.
+
 ### Recommended mechanism: prefilled GitHub Issues + repo-side processing
 
 The hub stays 100% read-only. Each item detail card gets action buttons that
