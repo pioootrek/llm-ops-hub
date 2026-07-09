@@ -157,7 +157,7 @@ class WorktreeSource:
         return sorted(
             str(p.relative_to(self.backlog_dir))
             for p in self.backlog_dir.rglob("*")
-            if p.is_file() and not p.name.startswith(".")
+            if p.is_file()
         )
 
     def read(self, rel_path: str) -> str:
