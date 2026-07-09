@@ -231,8 +231,9 @@ backlog** - the previous release stays live. Output: `index.html` (dashboard,
 including open feedback issues), `backlog.html` (table + item cards),
 `notes.html` (agent notes: browse/search, archive/delete via feedback
 issues), `done.html` (completed work grouped by month), and
-`data/index.json` for agents (items + done + notes + feedback issues + ref +
-commit + generated_at).
+`data/index.json` for agents (keys: `backlog` with the full items,
+`done`, `notes`, `feedback_issues`, `feedback_error`, `ref`, `commit`,
+`generated_at`).
 
 ## Configuration
 

@@ -157,7 +157,7 @@ class WorktreeSource:
         return sorted(
             str(p.relative_to(self.backlog_dir))
             for p in self.backlog_dir.rglob("*")
-            if p.is_file() and not p.name.startswith(".")
+            if p.is_file()
         )
 
     def read(self, rel_path: str) -> str:
@@ -171,30 +171,44 @@ class WorktreeSource:
 
 
 class MirrorSource:
-    """Reads a backlog directory from a bare mirror at a ref (build)."""
+    """Reads a backlog directory from a bare mirror at a ref (build). The
+    listing (with blob sizes) is cached for the source's lifetime: a bare
+    mirror at a fixed ref is immutable within one build, and callers hit
+    list_files()/size() many times per run."""
 
     def __init__(self, mirror: Path, ref: str, backlog_dir: str):
         self.mirror = mirror
         self.ref = ref
         self.backlog_dir = backlog_dir
         self.label = f"{ref}:{backlog_dir}"
+        self._entries: dict[str, int] | None = None
 
     def resolve_commit(self) -> str | None:
         result = run(["git", f"--git-dir={self.mirror}", "rev-parse", "--verify", "--quiet", self.ref])
         return result.stdout.strip() or None
 
-    def list_files(self) -> list[str]:
+    def _load_entries(self) -> dict[str, int]:
+        if self._entries is not None:
+            return self._entries
+        # -z: NUL-separated, no C-quoting of unusual filenames; -l: blob sizes.
         result = run(
-            ["git", f"--git-dir={self.mirror}", "ls-tree", "-r", "--name-only", self.ref, "--", self.backlog_dir]
+            ["git", f"--git-dir={self.mirror}", "ls-tree", "-r", "-l", "-z", self.ref, "--", self.backlog_dir]
         )
         if result.returncode != 0:
             raise ContractError(f"could not list {self.backlog_dir} at {self.ref}: {result.stderr.strip()}")
         prefix = f"{self.backlog_dir}/"
-        return sorted(
-            p[len(prefix):]
-            for p in result.stdout.splitlines()
-            if p.startswith(prefix)
-        )
+        entries: dict[str, int] = {}
+        for line in result.stdout.split("\0"):
+            meta, _, path = line.partition("\t")
+            if not path.startswith(prefix):
+                continue
+            size_field = meta.split()[3]
+            entries[path[len(prefix):]] = int(size_field) if size_field.isdigit() else 0
+        self._entries = entries
+        return entries
+
+    def list_files(self) -> list[str]:
+        return sorted(self._load_entries())
 
     def read(self, rel_path: str) -> str:
         result = run(["git", f"--git-dir={self.mirror}", "show", f"{self.ref}:{self.backlog_dir}/{rel_path}"])
@@ -212,10 +226,10 @@ class MirrorSource:
         return result.stdout
 
     def size(self, rel_path: str) -> int:
-        result = run(["git", f"--git-dir={self.mirror}", "cat-file", "-s", f"{self.ref}:{self.backlog_dir}/{rel_path}"])
-        if result.returncode != 0:
+        entries = self._load_entries()
+        if rel_path not in entries:
             raise ContractError(f"could not stat {rel_path} at {self.ref}")
-        return int(result.stdout.strip())
+        return entries[rel_path]
 
 
 # ---------------------------------------------------------------------------
@@ -250,11 +264,19 @@ def load_project_config(source) -> dict[str, Any]:
     return {}
 
 
+def is_hidden(rel_path: str) -> bool:
+    """Dotfiles (.gitkeep, .DS_Store, hidden dirs) are never records and are
+    ignored uniformly here, so the worktree and the mirror cannot disagree
+    about them (a divergence would pass local validate yet fail the hub build)."""
+    return any(part.startswith(".") for part in rel_path.split("/"))
+
+
 def item_files(source) -> list[str]:
     reserved = {INDEX_FILE, PROJECT_SCHEMA_FILE, PROJECT_DONE_SCHEMA_FILE, PROJECT_NOTE_SCHEMA_FILE, PROJECT_CONFIG_FILE}
     return [
         p for p in source.list_files()
         if p.endswith(".json")
+        and not is_hidden(p)
         and p not in reserved
         and not p.startswith(DONE_SUBDIR + "/")
         and not p.startswith(NOTES_SUBDIR + "/")
@@ -262,12 +284,15 @@ def item_files(source) -> list[str]:
 
 
 def done_files(source) -> list[str]:
-    return [p for p in source.list_files() if p.startswith(DONE_SUBDIR + "/") and p.endswith(".json")]
+    return [
+        p for p in source.list_files()
+        if p.startswith(DONE_SUBDIR + "/") and p.endswith(".json") and not is_hidden(p)
+    ]
 
 
 def note_files(source) -> list[str]:
     """Everything under notes/ - manifests and free-form payload files alike."""
-    return [p for p in source.list_files() if p.startswith(NOTES_SUBDIR + "/")]
+    return [p for p in source.list_files() if p.startswith(NOTES_SUBDIR + "/") and not is_hidden(p)]
 
 
 def note_manifest_files(source) -> list[str]:
@@ -585,11 +610,14 @@ def build_state_key(project: dict[str, Any], commit: str, github: dict[str, Any]
     """Everything a release depends on: repo state, GitHub data, tool, project
     config. If this key is unchanged since the last successful build, rendering
     again would produce an identical release."""
+    tool = hashlib.sha256()
+    for path in [Path(__file__), BUNDLED_SCHEMA, BUNDLED_DONE_SCHEMA, BUNDLED_NOTE_SCHEMA]:
+        tool.update(path.read_bytes())
     return canonical_json({
         "commit": commit,
         "github": github,
         "project": project,
-        "tool": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "tool": tool.hexdigest(),
     })
 
 
@@ -931,7 +959,7 @@ NOTE_ENVELOPE_KEYS = {"schema_version", "id", "title", "created", "author", "sta
 NOTE_RENDER_TEXT_LIMIT = 20000
 
 
-def note_detail(note: dict[str, Any], *, source, github_repo: str | None = None) -> str:
+def note_detail(note: dict[str, Any], *, payloads: dict[str, bytes], github_repo: str | None = None) -> str:
     content = ""
     search_parts = [canonical_json({k: v for k, v in note.items() if not k.startswith("_")})]
     if "body" in note:
@@ -949,8 +977,8 @@ def note_detail(note: dict[str, Any], *, source, github_repo: str | None = None)
                 f'<p><img class=note-image src="{h(file_rel)}" alt="{h(rel_file)}" loading=lazy></p>'
             )
             continue
-        text = source.read_bytes(file_rel).decode("utf-8", errors="replace")
-        search_parts.append(text)
+        text = payloads[file_rel].decode("utf-8", errors="replace")
+        search_parts.append(text[:NOTE_RENDER_TEXT_LIMIT])
         content += f"<h3>{h(rel_file)}</h3><pre>{h(text[:NOTE_RENDER_TEXT_LIMIT])}</pre>"
         if len(text) > NOTE_RENDER_TEXT_LIMIT:
             content += f'<p class=muted>truncated — <a href="{h(file_rel)}">full file</a></p>'
@@ -1047,10 +1075,15 @@ def render_site(
     (out / "data/index.json").write_text(canonical_json(index_data), encoding="utf-8")
     (cfg["paths"]["cache"] / "index.json").write_text(canonical_json(index_data), encoding="utf-8")
 
+    active_items = [i for i in items if i["status"] != "archived"]
+    archived_count = len(items) - len(active_items)
+
+    # Dashboard counts cover active items only, matching what the linked
+    # backlog views show by default; archived is reported as its own number.
     by_status: dict[str, int] = {}
     by_priority: dict[str, int] = {}
     high_risk = 0
-    for item in items:
+    for item in active_items:
         by_status[item["status"]] = by_status.get(item["status"], 0) + 1
         by_priority[item["priority"]] = by_priority.get(item["priority"], 0) + 1
         high_risk += item["risk"]["level"] == "high"
@@ -1058,11 +1091,12 @@ def render_site(
     def pills(counter: dict[str, int]) -> str:
         return "".join(f"<span class=pill>{h(k)}: {v}</span>" for k, v in sorted(counter.items()))
 
-    active_items = [i for i in items if i["status"] != "archived"]
-    archived_count = len(items) - len(active_items)
     latest_done = f"latest: {h(done_entries[0]['date'])}" if done_entries else "no entries yet"
+    archived_note = (
+        f'<p class=muted>+ {archived_count} archived (hidden from default views).</p>' if archived_count else ""
+    )
     home = [
-        card("Backlog", f"<p>{len(active_items)} active items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p><p><a href=backlog.html>Open backlog →</a></p>"),
+        card("Backlog", f"<p>{len(active_items)} active items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p>{archived_note}<p><a href=backlog.html>Open backlog →</a></p>"),
         card("Risk", f"<p>{high_risk} high-risk item(s).</p><p><a href=\"backlog.html?risk=high\">View high-risk →</a></p>"),
         card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p><p><a href=done.html>View done →</a></p>"),
         card("Notes", (
@@ -1119,9 +1153,9 @@ def render_site(
                 item["status"],
                 item["risk"]["level"],
                 item["_path"],
-                *item["problem"],
-                *item["value"],
-                *item["scope"],
+                *item.get("problem", []),
+                *item.get("value", []),
+                *item.get("scope", []),
             ]
         )
         rows.append(
@@ -1356,12 +1390,15 @@ document.documentElement.classList.add("js");
         encoding="utf-8",
     )
 
+    note_payloads: dict[str, bytes] = {}
     for note in notes:
         for rel_file in note["_files"]:
             file_rel = f"{note['_path']}/{rel_file}"
+            data = source.read_bytes(file_rel)
+            note_payloads[file_rel] = data
             dest = out / file_rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(source.read_bytes(file_rel))
+            dest.write_bytes(data)
 
     note_status_options = (
         '<option value="">Active</option><option value=archived>Archived</option><option value=all>All</option>'
@@ -1375,7 +1412,7 @@ document.documentElement.classList.add("js");
         f'<div class=control><label for=note-status>Status</label><select id=note-status>{note_status_options}</select></div>'
         '<div class=toolbar-actions><button class=button id=clear-note-search type=button>Reset</button></div></form>'
         '<div class=empty-state id=note-empty-state hidden>No matching notes.</div>'
-        + "".join(note_detail(note, source=source, github_repo=project["github_repo"]) for note in notes)
+        + "".join(note_detail(note, payloads=note_payloads, github_repo=project["github_repo"]) for note in notes)
         + ("<p class=muted>No notes yet.</p>" if not notes else "")
         + """
 <script>
@@ -1691,6 +1728,29 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert done_files(mixed) == ["done/DONE-20260703-sample-entry.json"]
     assert note_files(mixed) == [f"{note_dir}/findings.md", f"{note_dir}/note.json"]
     assert note_manifest_files(mixed) == [f"{note_dir}/note.json"]
+
+    hidden = _MemorySource({
+        "feature/FEAT-20260703-sample-item.json": good,
+        ".hidden.json": "junk",
+        "done/.keep": "",
+        "notes/.gitkeep": "",
+        f"{note_dir}/note.json": good_note,
+        f"{note_dir}/.DS_Store": b"junk",
+    })
+    assert item_files(hidden) == ["feature/FEAT-20260703-sample-item.json"], "hidden top-level files must be ignored"
+    assert done_files(hidden) == [], "hidden files under done/ must be ignored"
+    _, errs = validate_notes(hidden, note_schema)
+    assert not errs, f"hidden files under notes/ must be ignored: {errs}"
+
+    url = feedback_issue_url("owner/repo", "FEAT-20260703-sample-item", "set-priority", "now")
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert url.startswith("https://github.com/owner/repo/issues/new?"), f"unexpected issue URL: {url}"
+    assert query["labels"] == [FEEDBACK_LABEL]
+    assert query["title"] == [f"[{FEEDBACK_LABEL}] FEAT-20260703-sample-item: set-priority"]
+    assert query["body"] == ["item: FEAT-20260703-sample-item\naction: set-priority\npayload: now\n"], (
+        "the issue body is a producer/consumer contract - agents parse it per "
+        "templates/AGENTS.md, so change both together"
+    )
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"

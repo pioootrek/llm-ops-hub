@@ -186,7 +186,9 @@ commits:
 - `set-priority` -> set `priority` to the payload value
 - `archive` -> set `status: archived` + a dated note with the reason
 - `archive-note` -> set the agent note's `status` to `archived`
-- `delete-note` -> delete the note file
+- `delete-note` -> delete the ENTIRE note directory (`notes/<id>/`,
+  manifest and payload files alike); a leftover payload-only directory
+  fails validation
 
 Then run fmt + validate, commit, and close the issue referencing the commit.
 Ignore issues whose payload conflicts with the schema - comment on the issue
