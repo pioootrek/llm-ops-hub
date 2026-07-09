@@ -1,0 +1,53 @@
+{
+  "$id": "note.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Manifest of one agent note: durable findings written by LLM agents for LLM agents (audit results, discovered bugs, gotchas). A note is a directory notes/<id>/ holding this manifest as note.json plus any free-form payload files (markdown, JSON, images, ...). Only the manifest is validated and canonicalized; body accepts any JSON value, extra top-level fields are allowed, payload files are never rewritten. Humans only browse, search, archive, or delete.",
+  "properties": {
+    "author": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "body": {},
+    "created": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^NOTE-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "enum": [
+        "active",
+        "archived"
+      ]
+    },
+    "tags": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "title": {
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "created",
+    "author",
+    "status"
+  ],
+  "title": "Agent note",
+  "type": "object"
+}

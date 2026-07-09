@@ -49,6 +49,10 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "author": {
+            "minLength": 1,
+            "type": "string"
+          },
           "date": {
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
             "type": "string"
@@ -148,7 +152,8 @@
       "enum": [
         "open",
         "in-progress",
-        "blocked"
+        "blocked",
+        "archived"
       ]
     },
     "title": {

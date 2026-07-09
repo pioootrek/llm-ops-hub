@@ -37,8 +37,9 @@ bin/hub.py       <- the whole tool: fmt/validate (agent-side, run inside the
                     (hub-side, run on the worker against the bare mirror)
 bin/sync_hub.sh  <- thin wrapper (sync + build) called by the systemd timer
 schema/          <- bundled default JSON Schemas (backlog items, done
-                    entries); a project may override them with its own
-                    schema.json / done-schema.json in backlog_dir
+                    entries, agent notes); a project may override them with
+                    its own schema.json / done-schema.json / note-schema.json
+                    in backlog_dir
 templates/       <- the pack dropped into a monitored project's backlog dir:
                     AGENTS.md (agent operating guide), CLAUDE.md (include),
                     example project config.json
