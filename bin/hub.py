@@ -599,6 +599,17 @@ def validate_docs(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]],
         if not raw.startswith(canonical_frontmatter(header)):
             errors.append(f"{label}: frontmatter not in canonical form (run: hub.py fmt)")
 
+        # Calendar validity is beyond the schema's regex (2026-02-30 matches
+        # the pattern), and a bad date must not survive into docs_health():
+        # this check holds even if a project's override schema drops the
+        # pattern entirely.
+        if "last_reviewed" in header:
+            try:
+                dt.date.fromisoformat(header["last_reviewed"])
+            except ValueError:
+                errors.append(f"{label}: last_reviewed is not a real calendar date: {header['last_reviewed']!r}")
+                continue
+
         docs.append({"file": rel_path, "header": header, "_body": body})
 
     docs.sort(key=lambda d: d["file"])
@@ -2224,6 +2235,10 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     expect_doc_error({"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "last_reviewed")
     bad_doc = {"audience": "x", "status": "superseded"}
     expect_doc_error({"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "superseded_by")
+    bad_doc = dict(doc_header, last_reviewed="2026-02-30")
+    expect_doc_error(
+        {"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "not a real calendar date"
+    )  # matches the schema regex but must not reach docs_health(), which would crash on it
     unsorted = '---\nstatus: "archived"\naudience: "x"\n---\nbody'
     expect_doc_error({"sample.md": unsorted}, "canonical form")
     unquoted = '---\naudience: x\nstatus: "archived"\n---\nbody'
