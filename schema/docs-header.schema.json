@@ -1,0 +1,82 @@
+{
+  "$id": "docs-header.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": {
+    "type": "string"
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "active",
+              "reference"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "last_reviewed"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "superseded"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "superseded_by": {
+            "minLength": 1
+          }
+        },
+        "required": [
+          "superseded_by"
+        ]
+      }
+    }
+  ],
+  "description": "Frontmatter header of one docs page. The contract is JSON: the YAML block at the top of the markdown file is only surface syntax for this flat all-string dictionary. Extra keys are allowed but must be strings.",
+  "properties": {
+    "audience": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "last_reviewed": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "source_of_truth": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "active",
+        "reference",
+        "superseded",
+        "archived"
+      ]
+    },
+    "superseded_by": {
+      "type": "string"
+    }
+  },
+  "propertyNames": {
+    "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
+  },
+  "required": [
+    "status",
+    "audience"
+  ],
+  "title": "Docs page header",
+  "type": "object"
+}

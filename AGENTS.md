@@ -37,9 +37,10 @@ bin/hub.py       <- the whole tool: fmt/validate (agent-side, run inside the
                     (hub-side, run on the worker against the bare mirror)
 bin/sync_hub.sh  <- thin wrapper (sync + build) called by the systemd timer
 schema/          <- bundled default JSON Schemas (backlog items, done
-                    entries, agent notes); a project may override them with
-                    its own schema.json / done-schema.json / note-schema.json
-                    in backlog_dir
+                    entries, agent notes, docs headers); a project may
+                    override them with its own schema.json /
+                    done-schema.json / note-schema.json /
+                    docs-header-schema.json in backlog_dir
 templates/       <- the pack dropped into a monitored project's backlog dir:
                     AGENTS.md (agent operating guide), CLAUDE.md (include),
                     example project config.json
@@ -62,7 +63,10 @@ and must stay out of commits.
 3. **One canonical serialization.** `canonical_json()` (UTF-8, 2-space
    indent, sorted keys, trailing newline) is the contract; `fmt` produces
    it, `validate` compares byte-for-byte. Never add a second formatting
-   path.
+   path. Docs frontmatter has exactly one canonical form the same way:
+   `canonical_frontmatter()` (sorted keys, every value double-quoted) -
+   and its parser stays the tiny flat subset in `parse_frontmatter()`;
+   never introduce a YAML library.
 4. **Contract = JSON Schema.** Structural rules belong in
    `schema/backlog-item.schema.json` (or the project's override), not in
    ad-hoc Python checks. Python-side checks are only for cross-file rules a

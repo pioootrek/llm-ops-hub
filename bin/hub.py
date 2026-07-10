@@ -39,6 +39,7 @@ TOOL_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_SCHEMA = TOOL_ROOT / "schema" / "backlog-item.schema.json"
 BUNDLED_DONE_SCHEMA = TOOL_ROOT / "schema" / "done-entry.schema.json"
 BUNDLED_NOTE_SCHEMA = TOOL_ROOT / "schema" / "note.schema.json"
+BUNDLED_DOCS_SCHEMA = TOOL_ROOT / "schema" / "docs-header.schema.json"
 
 TYPE_PREFIX = {"feature": "FEAT", "fix": "FIX", "rework": "RWK", "security": "SEC"}
 PRIORITY_ORDER = {"now": 0, "next": 1, "later": 2}
@@ -46,7 +47,10 @@ INDEX_FILE = "index.json"
 PROJECT_SCHEMA_FILE = "schema.json"
 PROJECT_DONE_SCHEMA_FILE = "done-schema.json"
 PROJECT_NOTE_SCHEMA_FILE = "note-schema.json"
+PROJECT_DOCS_SCHEMA_FILE = "docs-header-schema.json"
 PROJECT_CONFIG_FILE = "config.json"
+DOCS_EXCLUDE = {"AGENTS.md", "CLAUDE.md", "README.md"}
+DOCS_STALE_DAYS_DEFAULT = 60
 DONE_SUBDIR = "done"
 NOTES_SUBDIR = "notes"
 NOTE_MANIFEST = "note.json"
@@ -78,6 +82,74 @@ def parse_json(label: str, text: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise ContractError(f"{label}: invalid JSON: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Canonical frontmatter (docs headers)
+#
+# Docs pages carry their metadata as a YAML frontmatter block, but the
+# contract stays JSON: the block is only surface syntax for a flat
+# all-string dictionary validated against docs-header.schema.json. The
+# subset parsed here is deliberately tiny - flat `key: value` lines, values
+# either double-quoted or bare scalars - so no YAML library (and none of
+# YAML's coercion traps: `no` -> false, bare dates -> objects) enters the
+# tool. canonical_frontmatter() is the one canonical form, mirroring
+# canonical_json(): sorted keys, every value double-quoted.
+
+FRONTMATTER_KEY_RE = re.compile(r"^([a-z0-9]+(?:_[a-z0-9]+)*):(.*)$")
+
+
+def _unquote_frontmatter_value(label: str, raw: str) -> str:
+    value = raw.strip()
+    if not value.startswith('"'):
+        return value  # bare scalar: always read as a string, never coerced
+    if len(value) < 2 or not value.endswith('"'):
+        raise ContractError(f"{label}: unterminated quoted value: {raw.strip()!r}")
+    body = value[1:-1]
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == '"':
+            raise ContractError(f"{label}: unescaped quote inside value: {raw.strip()!r}")
+        if ch == "\\":
+            if i + 1 >= len(body) or body[i + 1] not in '"\\':
+                raise ContractError(f"{label}: unsupported escape in value: {raw.strip()!r}")
+            out.append(body[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def parse_frontmatter(label: str, text: str) -> tuple[dict[str, str], str]:
+    """Returns (header, body). The file must open with a frontmatter block."""
+    lines = text.split("\n")
+    if lines[0] != "---":
+        raise ContractError(f"{label}: missing frontmatter (file must start with ---)")
+    header: dict[str, str] = {}
+    for index, line in enumerate(lines[1:], start=1):
+        if line == "---":
+            return header, "\n".join(lines[index + 1:])
+        if line == "" and index == len(lines) - 1:
+            break  # trailing newline at EOF: the block was never closed
+        match = FRONTMATTER_KEY_RE.match(line)
+        if not match:
+            raise ContractError(f"{label}: frontmatter line is not `key: value`: {line!r}")
+        key = match.group(1)
+        if key in header:
+            raise ContractError(f"{label}: duplicate frontmatter key {key!r}")
+        header[key] = _unquote_frontmatter_value(label, match.group(2))
+    raise ContractError(f"{label}: frontmatter block is never closed (missing ---)")
+
+
+def canonical_frontmatter(header: dict[str, str]) -> str:
+    quoted = {
+        key: value.replace("\\", "\\\\").replace('"', '\\"')
+        for key, value in header.items()
+    }
+    return "---\n" + "".join(f'{key}: "{quoted[key]}"\n' for key in sorted(quoted)) + "---\n"
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +328,39 @@ def load_note_schema(source) -> dict[str, Any]:
     return parse_json(str(BUNDLED_NOTE_SCHEMA), BUNDLED_NOTE_SCHEMA.read_text(encoding="utf-8"))
 
 
+def load_docs_schema(source) -> dict[str, Any]:
+    """Project-owned docs-header-schema.json (in the backlog dir) wins over
+    the bundled default."""
+    if PROJECT_DOCS_SCHEMA_FILE in source.list_files():
+        return parse_json(f"{source.label}/{PROJECT_DOCS_SCHEMA_FILE}", source.read(PROJECT_DOCS_SCHEMA_FILE))
+    return parse_json(str(BUNDLED_DOCS_SCHEMA), BUNDLED_DOCS_SCHEMA.read_text(encoding="utf-8"))
+
+
 def load_project_config(source) -> dict[str, Any]:
     if PROJECT_CONFIG_FILE in source.list_files():
         data = parse_json(f"{source.label}/{PROJECT_CONFIG_FILE}", source.read(PROJECT_CONFIG_FILE))
         if isinstance(data, dict):
             return data
     return {}
+
+
+def docs_settings(project_cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """The docs module is enabled by the project config (in the backlog dir)
+    naming a docs directory - repo-root-relative, like backlog_dir. The
+    project owns the switch, so agent-side fmt/validate and the hub build
+    cannot disagree about whether docs are part of the contract."""
+    docs_dir = str(project_cfg.get("docs_dir", "")).strip().strip("/")
+    if not docs_dir:
+        return None
+    try:
+        stale_days = max(0, int(project_cfg.get("docs_stale_days", DOCS_STALE_DAYS_DEFAULT)))
+    except (TypeError, ValueError) as exc:
+        raise ContractError(f"project config: docs_stale_days must be an integer: {exc}") from exc
+    return {
+        "dir": docs_dir,
+        "index_file": str(project_cfg.get("docs_index_file", "")).strip(),
+        "stale_days": stale_days,
+    }
 
 
 def is_hidden(rel_path: str) -> bool:
@@ -459,6 +558,137 @@ def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]]
     return notes, errors
 
 
+def docs_files(source) -> list[str]:
+    """Docs records are the top-level *.md pages of the docs dir. Instruction
+    files (AGENTS.md/CLAUDE.md/README.md) and subdirectories are out of the
+    contract's first pass."""
+    return [
+        p for p in source.list_files()
+        if p.endswith(".md") and "/" not in p and not is_hidden(p) and p not in DOCS_EXCLUDE
+    ]
+
+
+def validate_docs(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Returns (docs pages sorted by file name, error messages). Only the
+    frontmatter header is contract-checked; the markdown body is free-form
+    and kept for the docs-health link scan."""
+    validator = jsonschema.Draft202012Validator(schema)
+    errors: list[str] = []
+    docs: list[dict[str, Any]] = []
+
+    files = docs_files(source)
+    if not files:
+        errors.append(f"{source.label}: docs module is enabled but has no top-level *.md pages (check docs_dir)")
+
+    for rel_path in files:
+        label = f"{source.label}/{rel_path}"
+        try:
+            raw = source.read(rel_path)
+            header, body = parse_frontmatter(label, raw)
+        except ContractError as exc:
+            errors.append(str(exc))
+            continue
+
+        schema_errors = sorted(validator.iter_errors(header), key=lambda e: list(e.path))
+        if schema_errors:
+            for err in schema_errors:
+                where = "/".join(str(p) for p in err.path) or "(root)"
+                errors.append(f"{label}: {where}: {err.message}")
+            continue
+
+        if not raw.startswith(canonical_frontmatter(header)):
+            errors.append(f"{label}: frontmatter not in canonical form (run: hub.py fmt)")
+
+        # Calendar validity is beyond the schema's regex (2026-02-30 matches
+        # the pattern), and a bad date must not survive into docs_health():
+        # this check holds even if a project's override schema drops the
+        # pattern entirely.
+        if "last_reviewed" in header:
+            try:
+                dt.date.fromisoformat(header["last_reviewed"])
+            except ValueError:
+                errors.append(f"{label}: last_reviewed is not a real calendar date: {header['last_reviewed']!r}")
+                continue
+
+        docs.append({"file": rel_path, "header": header, "_body": body})
+
+    docs.sort(key=lambda d: d["file"])
+    return docs, errors
+
+
+MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+
+
+def doc_relative_links(body: str) -> list[str]:
+    """Relative link targets in a markdown body - external URLs, anchors, and
+    absolute paths are somebody else's problem."""
+    targets = []
+    for target in MD_LINK_RE.findall(body):
+        if re.match(r"^[a-z][a-z0-9+.-]*:", target) or target.startswith(("/", "#")):
+            continue
+        cleaned = target.split("#", 1)[0]
+        if cleaned:
+            targets.append(cleaned)
+    return targets
+
+
+def docs_health(
+    docs: list[dict[str, Any]],
+    source,
+    settings: dict[str, Any],
+    today: dt.date,
+) -> dict[str, Any]:
+    """Per-page findings for the Docs health page. These are report-only:
+    unlike a broken header they never fail the build, so one dead link
+    cannot take the whole hub release hostage."""
+    entries = set(source.list_files())
+    dirs = set()
+    for rel in entries:
+        parts = rel.split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            dirs.add("/".join(parts[:depth]))
+    index_file = settings["index_file"]
+    index_text = source.read(index_file) if index_file and index_file in entries else None
+
+    by_status: dict[str, int] = {}
+    for doc in docs:
+        header = doc["header"]
+        by_status[header["status"]] = by_status.get(header["status"], 0) + 1
+
+        reviewed_days = None
+        if re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", header.get("last_reviewed", "")):
+            reviewed_days = (today - dt.date.fromisoformat(header["last_reviewed"])).days
+        doc["reviewed_days"] = reviewed_days
+        doc["overdue"] = (
+            header["status"] in ("active", "reference")
+            and settings["stale_days"] > 0
+            and (reviewed_days is None or reviewed_days > settings["stale_days"])
+        )
+
+        doc["missing_from_index"] = (
+            index_text is not None
+            and doc["file"] != index_file
+            and f"({doc['file']})" not in index_text
+        )
+
+        dead = []
+        for target in doc_relative_links(doc["_body"]):
+            normalized = os.path.normpath(target).replace(os.sep, "/")
+            if normalized.startswith(".."):
+                continue  # points outside the docs tree; not checkable here
+            if normalized not in entries and normalized.rstrip("/") not in dirs:
+                dead.append(target)
+        doc["dead_links"] = sorted(set(dead))
+
+    return {
+        "by_status": by_status,
+        "dead_link_count": sum(len(d["dead_links"]) for d in docs),
+        "missing_from_index": sorted(d["file"] for d in docs if d["missing_from_index"]),
+        "overdue": sorted(d["file"] for d in docs if d["overdue"]),
+        "stale_days": settings["stale_days"],
+    }
+
+
 def build_index(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated_by": "hub.py fmt",
@@ -511,6 +741,21 @@ def _worktree(backlog_dir: str) -> WorktreeSource:
     return WorktreeSource(path)
 
 
+def _docs_worktree(source: WorktreeSource, settings: dict[str, Any]) -> WorktreeSource:
+    """docs_dir is repo-root-relative (like backlog_dir), so the repo root is
+    resolved through git - the backlog contract already requires a checkout."""
+    result = run(["git", "-C", str(source.backlog_dir), "rev-parse", "--show-toplevel"])
+    if result.returncode != 0:
+        raise ContractError(
+            f"docs_dir {settings['dir']!r} is configured but the repo root could not be "
+            f"resolved ({result.stderr.strip() or 'not a git checkout'})"
+        )
+    path = Path(result.stdout.strip()) / settings["dir"]
+    if not path.is_dir():
+        raise ContractError(f"docs directory not found: {path}")
+    return WorktreeSource(path)
+
+
 def cmd_fmt(args: argparse.Namespace) -> int:
     source = _worktree(args.backlog_dir)
     changed = 0
@@ -527,11 +772,32 @@ def cmd_fmt(args: argparse.Namespace) -> int:
 
     schema = load_schema(source)
     project_cfg = load_project_config(source)
+    settings = docs_settings(project_cfg)
+    docs_source = _docs_worktree(source, settings) if settings else None
+    if docs_source is not None:
+        # Canonicalize only the frontmatter block; the markdown body is the
+        # authors' own text and is never rewritten.
+        for rel_path in docs_files(docs_source):
+            label = f"{docs_source.label}/{rel_path}"
+            raw = docs_source.read(rel_path)
+            try:
+                header, body = parse_frontmatter(label, raw)
+            except ContractError:
+                continue  # reported by the validation pass below
+            formatted = canonical_frontmatter(header) + body
+            if raw != formatted:
+                (docs_source.backlog_dir / rel_path).write_text(formatted, encoding="utf-8")
+                changed += 1
+                print(f"formatted {settings['dir']}/{rel_path}")
+
     items, errors = validate_items(source, schema, project_cfg)
     _, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
     notes, note_errors = validate_notes(source, load_note_schema(source))
     errors += note_errors
+    if docs_source is not None:
+        _, docs_errors = validate_docs(docs_source, load_docs_schema(source))
+        errors += docs_errors
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -557,12 +823,18 @@ def cmd_validate(args: argparse.Namespace) -> int:
     notes, note_errors = validate_notes(source, load_note_schema(source))
     errors += note_errors
     errors += validate_index(source, items, notes)
+    settings = docs_settings(project_cfg)
+    docs = []
+    if settings:
+        docs, docs_errors = validate_docs(_docs_worktree(source, settings), load_docs_schema(source))
+        errors += docs_errors
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         print(f"validate: {len(errors)} error(s)", file=sys.stderr)
         return 2
-    print(f"validate: OK ({len(items)} items, {len(done_entries)} done entries, {len(notes)} notes)")
+    docs_note = f", {len(docs)} docs pages" if settings else ""
+    print(f"validate: OK ({len(items)} items, {len(done_entries)} done entries, {len(notes)} notes{docs_note})")
     return 0
 
 
@@ -616,7 +888,7 @@ def build_state_key(project: dict[str, Any], commit: str, github: dict[str, Any]
         "project": project,
         "schemas": {
             str(path.relative_to(TOOL_ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in [BUNDLED_SCHEMA, BUNDLED_DONE_SCHEMA, BUNDLED_NOTE_SCHEMA]
+            for path in [BUNDLED_SCHEMA, BUNDLED_DONE_SCHEMA, BUNDLED_NOTE_SCHEMA, BUNDLED_DOCS_SCHEMA]
         },
         "tool": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     })
@@ -682,6 +954,13 @@ def cmd_build(args: argparse.Namespace) -> int:
     notes, note_errors = validate_notes(source, load_note_schema(source))
     errors += note_errors
     errors += validate_index(source, items, notes)
+    settings = docs_settings(project_cfg)
+    docs = None
+    docs_source = None
+    if settings:
+        docs_source = MirrorSource(paths["mirror"], project["backlog_ref"], settings["dir"])
+        docs, docs_errors = validate_docs(docs_source, load_docs_schema(source))
+        errors += docs_errors
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -695,7 +974,10 @@ def cmd_build(args: argparse.Namespace) -> int:
     if release.exists():
         release = paths["releases"] / f"{stamp}-{os.getpid()}"
 
-    render_site(cfg, source, items, done_entries, notes, commit, github, release)
+    render_site(
+        cfg, source, items, done_entries, notes, commit, github, release,
+        docs=docs, docs_source=docs_source, docs_cfg=settings,
+    )
 
     tmp_link = paths["root"] / "public.next"
     if tmp_link.exists() or tmp_link.is_symlink():
@@ -781,12 +1063,13 @@ STALE_SCRIPT = """
 """
 
 
-def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "") -> str:
+def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "", with_docs: bool = False) -> str:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
         ("notes", "notes.html", "Notes"),
         ("done", "done.html", "Done"),
+        *([("docs", "docs.html", "Docs")] if with_docs else []),
         ("data", "data/index.json", "JSON"),
     ]
     nav = "".join(
@@ -1081,6 +1364,89 @@ def done_detail(entry: dict[str, Any]) -> str:
     )
 
 
+def docs_status_pill(status: str) -> str:
+    tone = {"active": "risk-low", "reference": "", "superseded": "risk-medium", "archived": ""}.get(status, "")
+    return f'<span class="pill {tone}">{h(status)}</span>'
+
+
+def docs_health_body(
+    docs: list[dict[str, Any]],
+    health: dict[str, Any],
+    docs_cfg: dict[str, Any],
+    project: dict[str, Any],
+    commit: str,
+) -> str:
+    """The docs-health page: one row per page plus the standing findings the
+    hub replaces one-off documentation audits with (stale reviews, index
+    gaps, dead relative links)."""
+    status_pills = "".join(
+        f"<span class=pill>{h(status)}: {count}</span>" for status, count in sorted(health["by_status"].items())
+    )
+    summary_cards = [
+        card("Statuses", f"<p>{len(docs)} pages in <code>{h(docs_cfg['dir'])}</code>.</p><p>{status_pills}</p>"),
+        card(
+            "Review freshness",
+            f"<p>{len(health['overdue'])} active/reference page(s) not reviewed in the last "
+            f"{health['stale_days']} days.</p>"
+            + "".join(f'<p class=muted><code>{h(f)}</code></p>' for f in health["overdue"][:8]),
+        ),
+        card(
+            "Index coverage",
+            (
+                f"<p>{len(health['missing_from_index'])} page(s) missing from <code>{h(docs_cfg['index_file'])}</code>.</p>"
+                + "".join(f'<p class=muted><code>{h(f)}</code></p>' for f in health["missing_from_index"][:8])
+                if docs_cfg["index_file"]
+                else "<p class=muted>No index file configured (<code>docs_index_file</code>).</p>"
+            ),
+        ),
+        card(
+            "Links",
+            f"<p>{health['dead_link_count']} dead relative link(s) between docs.</p>"
+            "<p class=muted>Only targets inside the docs tree are checked.</p>",
+        ),
+    ]
+
+    rows = []
+    for doc in docs:
+        header = doc["header"]
+        reviewed = header.get("last_reviewed", "")
+        if reviewed and doc["reviewed_days"] is not None:
+            reviewed = f"{reviewed} ({doc['reviewed_days']}d)"
+        findings = []
+        if doc["overdue"]:
+            findings.append('<span class="pill stale">review overdue</span>')
+        if doc["missing_from_index"]:
+            findings.append('<span class="pill stale">not in index</span>')
+        findings.extend(
+            f'<span class="pill stale" title="dead link">→ {h(target)}</span>' for target in doc["dead_links"]
+        )
+        detail = h(header.get("source_of_truth", "")) or h(header.get("audience", ""))
+        if header.get("superseded_by"):
+            detail += f' <span class=pill>superseded by <code>{h(header["superseded_by"])}</code></span>'
+        rows.append(
+            f"<tr><td><strong>{h(doc['file'])}</strong><div class=muted>{detail}</div></td>"
+            f"<td>{docs_status_pill(header['status'])}</td>"
+            f"<td>{h(reviewed) if header.get('last_reviewed') else '<span class=muted>—</span>'}</td>"
+            f"<td>{' '.join(findings) if findings else '<span class=muted>ok</span>'}</td></tr>"
+        )
+    table = (
+        "<div class=backlog-list><table>"
+        '<colgroup><col style="width:44%"><col style="width:12%"><col style="width:16%"><col style="width:28%"></colgroup>'
+        "<thead><tr><th>Page</th><th>Status</th><th>Last reviewed</th><th>Findings</th></tr></thead>"
+        "<tbody>" + "".join(rows) + "</tbody></table></div>"
+    )
+    return (
+        '<div class=page-heading><div><h1>Docs health</h1>'
+        f"<p class=muted>Frontmatter contract read from <code>{h(docs_cfg['dir'])}</code> at "
+        f"<code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code>. "
+        "Headers are enforced by validate/build; the findings below are report-only.</p></div>"
+        f"<div class=heading-meta><span class=pill>{len(docs)} pages</span>"
+        f"<span class=pill>threshold {health['stale_days']}d</span></div></div>"
+        f"<section class=grid>{''.join(summary_cards)}</section>"
+        f"<section style=\"margin-top:14px\">{table}</section>"
+    )
+
+
 def render_site(
     cfg: dict[str, Any],
     source,
@@ -1090,12 +1456,17 @@ def render_site(
     commit: str,
     github: dict[str, Any],
     out: Path,
+    *,
+    docs: list[dict[str, Any]] | None = None,
+    docs_source=None,
+    docs_cfg: dict[str, Any] | None = None,
 ) -> None:
     project = cfg["project"]
     name = project["name"]
     has_github = bool(project["github_repo"])
     issues = github["issues"]
     issue_error = github["issue_error"]
+    with_docs = docs is not None and docs_source is not None and docs_cfg is not None
 
     (out / "assets").mkdir(parents=True, exist_ok=True)
     (out / "data").mkdir(parents=True, exist_ok=True)
@@ -1104,6 +1475,7 @@ def render_site(
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     css_version = "?v=" + generated_at.replace("-", "").replace(":", "").replace("+", "")
     today = dt.date.fromisoformat(generated_at[:10])
+    health = docs_health(docs, docs_source, docs_cfg, today) if with_docs else None
     index_data = {
         "backlog": items,
         "commit": commit,
@@ -1115,6 +1487,22 @@ def render_site(
         "ref": project["backlog_ref"],
         "schema_version": 1,
     }
+    if with_docs:
+        index_data["docs"] = {
+            "dir": docs_cfg["dir"],
+            "health": health,
+            "pages": [
+                {
+                    "dead_links": doc["dead_links"],
+                    "file": doc["file"],
+                    "header": doc["header"],
+                    "missing_from_index": doc["missing_from_index"],
+                    "overdue": doc["overdue"],
+                    "reviewed_days": doc["reviewed_days"],
+                }
+                for doc in docs
+            ],
+        }
     (out / "data/index.json").write_text(canonical_json(index_data), encoding="utf-8")
     (cfg["paths"]["cache"] / "index.json").write_text(canonical_json(index_data), encoding="utf-8")
 
@@ -1149,6 +1537,22 @@ def render_site(
         )),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
+    if with_docs:
+        finding_pills = "".join(
+            f'<span class="pill stale">{count} {h(label)}</span>'
+            for count, label in [
+                (len(health["overdue"]), "overdue review(s)"),
+                (len(health["missing_from_index"]), "not in index"),
+                (health["dead_link_count"], "dead link(s)"),
+            ]
+            if count
+        )
+        docs_summary = (
+            f"<p>{len(docs)} pages in <code>{h(docs_cfg['dir'])}</code>.</p><p>{pills(health['by_status'])}</p>"
+            + (f"<p>{finding_pills}</p>" if finding_pills else "<p class=muted>No findings.</p>")
+            + "<p><a href=docs.html>Open docs health →</a></p>"
+        )
+        home.insert(4, card("Docs health", docs_summary))
     if has_github:
         issue_links = "".join(
             f'<p><a href="{h(i["url"])}">#{h(i["number"])}</a> {h(i["title"])}</p>' for i in issues[:5]
@@ -1178,6 +1582,7 @@ def render_site(
             active="home",
             generated_at=generated_at,
             css_version=css_version,
+            with_docs=with_docs,
         ),
         encoding="utf-8",
     )
@@ -1429,7 +1834,7 @@ document.documentElement.classList.add("js");
         + backlog_script
     )
     (out / "backlog.html").write_text(
-        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version),
+        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version, with_docs=with_docs),
         encoding="utf-8",
     )
 
@@ -1497,7 +1902,7 @@ document.documentElement.classList.add("js");
 """
     )
     (out / "notes.html").write_text(
-        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version),
+        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version, with_docs=with_docs),
         encoding="utf-8",
     )
 
@@ -1571,9 +1976,23 @@ document.documentElement.classList.add("js");
 </script>
 """
     (out / "done.html").write_text(
-        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version),
+        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version, with_docs=with_docs),
         encoding="utf-8",
     )
+
+    if with_docs:
+        (out / "docs.html").write_text(
+            page(
+                name,
+                "Docs health",
+                docs_health_body(docs, health, docs_cfg, project, commit),
+                active="docs",
+                generated_at=generated_at,
+                css_version=css_version,
+                with_docs=True,
+            ),
+            encoding="utf-8",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1767,6 +2186,100 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert index["notes"][0]["files"] == ["findings.md", "shot.png"], "index must list note payload files"
     assert index["notes"][0]["path"] == note_dir, "index must carry the note directory path"
 
+    docs_schema = parse_json(str(BUNDLED_DOCS_SCHEMA), BUNDLED_DOCS_SCHEMA.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(docs_schema)
+
+    doc_header = {"audience": "self-test readers", "last_reviewed": "2026-07-01", "status": "active"}
+    doc_body = "\n# Sample Playbook\n\nSee [other](other-page.md) and [index](playbooks.md).\n"
+    good_doc = canonical_frontmatter(doc_header) + doc_body
+
+    parsed_header, parsed_body = parse_frontmatter("x", good_doc)
+    assert parsed_header == doc_header and parsed_body == doc_body, "frontmatter parse must round-trip"
+    assert canonical_frontmatter(parsed_header) + parsed_body == good_doc, "canonical frontmatter must be idempotent"
+    tricky = {"note": 'quote " and backslash \\ survive'}
+    reparsed, _ = parse_frontmatter("x", canonical_frontmatter(tricky) + "body")
+    assert reparsed == tricky, "escaping must round-trip"
+    bare_header, _ = parse_frontmatter("x", '---\nstatus: no\n---\nbody')
+    assert bare_header["status"] == "no", "bare scalars must stay strings, never YAML-coerced"
+
+    def expect_doc_error(files: dict[str, Any], needle: str) -> None:
+        _, errs = validate_docs(_MemorySource(files), docs_schema)
+        assert any(needle in e for e in errs), f"expected docs error containing {needle!r}, got {errs}"
+
+    index_doc = canonical_frontmatter(
+        {"audience": "self-test readers", "last_reviewed": "2026-07-01", "status": "active"}
+    ) + "\n# Index\n\n[sample](sample-playbook.md)\n"
+    docs_tree = {
+        "sample-playbook.md": good_doc,
+        "playbooks.md": index_doc,
+        "other-page.md": canonical_frontmatter(
+            {"audience": "x", "status": "superseded", "superseded_by": "sample-playbook.md"}
+        ) + "\n[dead](gone.md) [dir](backlog/) [out](https://example.com) [anchor](#x)\n",
+        "AGENTS.md": "instruction files are not docs records",
+        "backlog/feature/x.json": "{}",
+    }
+    parsed_docs, errs = validate_docs(_MemorySource(docs_tree), docs_schema)
+    assert not errs, f"valid docs tree reported errors: {errs}"
+    assert [d["file"] for d in parsed_docs] == ["other-page.md", "playbooks.md", "sample-playbook.md"], (
+        "docs records must be the non-instruction top-level *.md files only"
+    )
+
+    expect_doc_error({"sample.md": "# No frontmatter\n"}, "missing frontmatter")
+    expect_doc_error({"sample.md": '---\nstatus: "active"\n'}, "never closed")
+    expect_doc_error({"sample.md": '---\nStatus: "active"\n---\n'}, "not `key: value`")
+    expect_doc_error({"sample.md": '---\na: "1"\na: "2"\n---\n'}, "duplicate frontmatter key")
+    expect_doc_error({"sample.md": '---\na: "unterminated\n---\n'}, "unterminated quoted value")
+    bad_doc = dict(doc_header, status="draft")
+    expect_doc_error({"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "status")
+    bad_doc = {"audience": "x", "status": "active"}
+    expect_doc_error({"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "last_reviewed")
+    bad_doc = {"audience": "x", "status": "superseded"}
+    expect_doc_error({"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "superseded_by")
+    bad_doc = dict(doc_header, last_reviewed="2026-02-30")
+    expect_doc_error(
+        {"sample.md": canonical_frontmatter(bad_doc) + doc_body}, "not a real calendar date"
+    )  # matches the schema regex but must not reach docs_health(), which would crash on it
+    unsorted = '---\nstatus: "archived"\naudience: "x"\n---\nbody'
+    expect_doc_error({"sample.md": unsorted}, "canonical form")
+    unquoted = '---\naudience: x\nstatus: "archived"\n---\nbody'
+    expect_doc_error({"sample.md": unquoted}, "canonical form")
+    expect_doc_error({"AGENTS.md": "only instruction files here"}, "no top-level *.md pages")
+
+    assert doc_relative_links(docs_tree["other-page.md"]) == ["gone.md", "backlog/"], (
+        "relative-link scan must skip external URLs and anchors"
+    )
+
+    health = docs_health(
+        parsed_docs,
+        _MemorySource(docs_tree),
+        {"dir": "docs", "index_file": "playbooks.md", "stale_days": 60},
+        dt.date(2026, 7, 10),
+    )
+    assert health["by_status"] == {"active": 2, "superseded": 1}, f"status counts wrong: {health['by_status']}"
+    assert health["overdue"] == [], f"9-day-old review must not be overdue at 60d: {health['overdue']}"
+    assert health["missing_from_index"] == ["other-page.md"], f"index gap not detected: {health['missing_from_index']}"
+    by_file = {d["file"]: d for d in parsed_docs}
+    assert by_file["other-page.md"]["dead_links"] == ["gone.md"], (
+        f"dead link detection wrong (backlog/ exists as a dir): {by_file['other-page.md']['dead_links']}"
+    )
+    assert by_file["sample-playbook.md"]["dead_links"] == [], (
+        f"links to existing pages must not be dead: {by_file['sample-playbook.md']['dead_links']}"
+    )
+    health = docs_health(
+        parsed_docs,
+        _MemorySource(docs_tree),
+        {"dir": "docs", "index_file": "", "stale_days": 5},
+        dt.date(2026, 7, 10),
+    )
+    assert health["overdue"] == ["playbooks.md", "sample-playbook.md"], (
+        f"active/reference pages older than the threshold must be overdue: {health['overdue']}"
+    )
+    assert health["missing_from_index"] == [], "no index file configured means no index findings"
+
+    assert docs_settings({}) is None, "docs module must default to disabled"
+    settings = docs_settings({"docs_dir": "docs/", "docs_index_file": "playbooks.md"})
+    assert settings == {"dir": "docs", "index_file": "playbooks.md", "stale_days": DOCS_STALE_DAYS_DEFAULT}, settings
+
     mixed = _MemorySource({
         "feature/FEAT-20260703-sample-item.json": good,
         "AGENTS.md": "top-level docs are ignored",
@@ -1807,6 +2320,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "schema/backlog-item.schema.json",
         "schema/done-entry.schema.json",
         "schema/note.schema.json",
+        "schema/docs-header.schema.json",
     }, "build state key must include bundled schema hashes"
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
