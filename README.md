@@ -108,6 +108,51 @@ LLM, not the human: the hub renders them on `notes.html` (text inline,
 images inline, full-text search) where humans can browse and - via the
 feedback loop - archive or delete them, nothing more.
 
+## Docs pages (optional)
+
+The fourth record type covers the project's living documentation
+(playbooks, contracts, reference docs). Every top-level `*.md` page of a
+configured docs directory must open with a YAML frontmatter block - but the
+contract stays JSON: the block is only surface syntax for a flat,
+all-string dictionary validated against
+`schema/docs-header.schema.json` (project-overridable via
+`docs-header-schema.json` in the backlog dir). Instruction files
+(`AGENTS.md`, `CLAUDE.md`, `README.md`) and subdirectories are exempt.
+
+```yaml
+---
+audience: "engineering agents changing org sync"
+last_reviewed: "2026-07-09"
+source_of_truth: "Kinde organization to Neon synchronization contract"
+status: "active"
+---
+```
+
+Hard rules: keys sorted, every value double-quoted (`fmt` canonicalizes the
+block and never touches the markdown body), `status` one of
+`active | reference | superseded | archived`, `audience` required,
+`last_reviewed` required for `active`/`reference`, `superseded_by` required
+non-empty for `superseded`. Extra string keys are allowed. `validate` and
+`build` fail closed on a missing or non-contract header, exactly as for
+backlog records.
+
+The module is enabled by the **project's** `config.json` (in the backlog
+dir), so agent-side `fmt`/`validate` and the hub build cannot disagree
+about whether docs are part of the contract:
+
+| Project config key | Meaning | Default |
+| --- | --- | --- |
+| `docs_dir` | repo-root-relative docs directory; non-empty enables the module | unset (disabled) |
+| `docs_index_file` | discovery index page checked for a link to every other page | unset (check skipped) |
+| `docs_stale_days` | review-staleness threshold for the health report (`0` disables) | `60` |
+
+When enabled, the build renders a **Docs health** page (plus a dashboard
+card and a `docs` block in `data/index.json` for agents): status
+distribution, pages whose `last_reviewed` is past the threshold, pages
+missing from the index file, and dead relative links between docs. Those
+findings are report-only - a stale review or dead link never blocks a
+release; only broken headers do.
+
 ## Human feedback
 
 The hub is read-only, but when `project.github_repo` is set, each rendered
@@ -261,7 +306,7 @@ to `config.json` for a local or deployment-specific instance.
 ```
 bin/hub.py       the whole tool (fmt / validate / sync / build / serve / self-test)
 bin/sync_hub.sh  sync + build wrapper used by the systemd timer
-schema/          bundled default JSON Schemas (backlog items, done entries, agent notes)
+schema/          bundled default JSON Schemas (backlog items, done entries, agent notes, docs headers)
 templates/       pack for monitored projects: AGENTS.md, CLAUDE.md, config.json
 systemd/         worker units: sync timer/service, LAN-only static HTTP service
 config.example.json

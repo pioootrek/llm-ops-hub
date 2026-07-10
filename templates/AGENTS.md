@@ -167,6 +167,34 @@ notes/NOTE-20260705-auth-audit/
 - Never put secrets or credentials in notes - the hub renders them,
   images included.
 
+## Docs pages (only if `docs_dir` is set in this directory's config.json)
+
+When the project enables the docs module, every top-level `*.md` page of
+the configured docs directory (except `AGENTS.md`/`CLAUDE.md`/`README.md`)
+must open with a YAML frontmatter block - a flat, all-string, key-sorted,
+double-quoted dictionary:
+
+```yaml
+---
+audience: "who should read this doc"
+last_reviewed: "2026-07-09"
+source_of_truth: "what this doc is authoritative for"
+status: "active"
+---
+```
+
+- `status`: `active | reference | superseded | archived`; `audience`:
+  required; `last_reviewed` (`YYYY-MM-DD`): required for
+  `active`/`reference` - update it when you re-verify content, not on
+  mechanical edits; `superseded_by`: required non-empty path for
+  `superseded`; extra string keys allowed.
+- The same `fmt` run canonicalizes the block (it never touches the body);
+  `validate` fails on a missing or malformed header, so docs edits follow
+  the exact fmt -> validate -> commit workflow as backlog records.
+- The hub renders a Docs health page from the headers (stale reviews,
+  pages missing from the docs index, dead relative links) and exposes the
+  metadata under `docs` in `data/index.json`.
+
 ## Hub feedback issues
 
 If the project is on GitHub, the hub renders feedback buttons that open
