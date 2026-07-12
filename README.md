@@ -194,6 +194,14 @@ python3 ~/tools/backlog-hub/bin/hub.py validate --backlog-dir docs/backlog
 git add docs/backlog && git commit -m "Adopt backlog-as-code"
 ```
 
+Optional - to put the project's living docs (playbooks, contracts,
+reference pages) under the same enforcement, add the docs-module keys to
+`docs/backlog/config.json` (`"docs_dir": "docs"`, optionally
+`docs_index_file` / `docs_stale_days` - see [Docs pages](#docs-pages-optional)),
+give every top-level page of that directory a frontmatter header, and re-run
+`fmt` + `validate`. The same two commands gate docs headers from then on,
+and the hub build renders the Docs health page.
+
 The copied `docs/backlog/AGENTS.md` is the operating guide agents load when
 working inside the backlog directory (record contract, lifecycle, query
 patterns); adjust its marked spots before committing. From then on the whole
@@ -234,6 +242,10 @@ closing backlog items. The short version:
   starting non-trivial work; persist what matters before compacting.
 - Open GitHub issues labeled `backlog-feedback` are human instructions for
   the backlog - apply them as described in the guide, then close them.
+- (Only if the docs module is enabled) editing any top-level page of the
+  configured docs directory counts as a backlog-contract edit too: the page
+  must keep its YAML frontmatter header, and the same fmt+validate commands
+  must exit 0 before you commit.
 ```
 
 Reword freely; the load-bearing parts are the pointer to
