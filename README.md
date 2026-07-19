@@ -173,11 +173,15 @@ the project repo; the third is one machine on your LAN.
 ### 1. Wire up the monitored project
 
 On any machine that edits the backlog (developer laptops, agent runners),
-clone this repo once and install the single dependency:
+clone this repo once and install the single dependency into a local
+virtualenv - this keeps the tool's dependency out of the system Python on
+machines that juggle many projects (the dedicated LAN worker in section 3
+is the one place a system-wide install is acceptable):
 
 ```bash
-git clone <this-repo-url> ~/tools/backlog-hub
-python3 -m pip install jsonschema
+git clone <this-repo-url> ~/tools/backlog-hub && cd ~/tools/backlog-hub
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python bin/hub.py self-test
 ```
 
 Then, inside the project repo:
@@ -189,8 +193,8 @@ cp ~/tools/backlog-hub/templates/AGENTS.md \
    ~/tools/backlog-hub/templates/CLAUDE.md \
    ~/tools/backlog-hub/templates/config.json docs/backlog/
 $EDITOR docs/backlog/config.json     # set this project's areas enum
-python3 ~/tools/backlog-hub/bin/hub.py fmt      --backlog-dir docs/backlog
-python3 ~/tools/backlog-hub/bin/hub.py validate --backlog-dir docs/backlog
+~/tools/backlog-hub/.venv/bin/python ~/tools/backlog-hub/bin/hub.py fmt      --backlog-dir docs/backlog
+~/tools/backlog-hub/.venv/bin/python ~/tools/backlog-hub/bin/hub.py validate --backlog-dir docs/backlog
 git add docs/backlog && git commit -m "Adopt backlog-as-code"
 ```
 
@@ -228,8 +232,8 @@ closing backlog items. The short version:
 - Backlog changes are ordinary commits to `<backlog-branch>`; there is no
   other write path. Never edit `docs/backlog/index.json` by hand.
 - After ANY edit under `docs/backlog/`, run
-  `python3 <path-to-hub>/bin/hub.py fmt --backlog-dir docs/backlog`, then
-  the same command with `validate` - it must exit 0 before you commit.
+  `<path-to-hub>/.venv/bin/python <path-to-hub>/bin/hub.py fmt --backlog-dir docs/backlog`,
+  then the same command with `validate` - it must exit 0 before you commit.
 - Pick up work from items with `status: open`, highest priority first
   (`now` > `next` > `later`); read the full item before starting, and treat
   human-authored notes (`"author": "human:..."`) as direction.
@@ -253,7 +257,10 @@ Reword freely; the load-bearing parts are the pointer to
 (without it agents never use their shared memory), and the
 `backlog-feedback` bullet (drop that one if the project is not on GitHub).
 If the project follows the `AGENTS.md`-plus-`CLAUDE.md`-include convention,
-the snippet goes into `AGENTS.md` only.
+the snippet goes into `AGENTS.md` only. When several repositories on one
+machine share the hub, pin the tool path behind an environment variable in
+the snippet (for example `BACKLOG_HUB_DIR`, defaulting to a sibling
+checkout) so agents do not hard-code a machine-specific location.
 
 ### 3. Stand up the hub worker
 

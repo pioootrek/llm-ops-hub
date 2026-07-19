@@ -23,7 +23,7 @@ HTML for humans plus JSON for agents. User-facing documentation lives in
 
 - Every `AGENTS.md` is the only place its rules are written.
 - Every `AGENTS.md` has a sibling `CLAUDE.md` whose entire content is one
-  include line (`@AGENTS.md`) plus a do-not-duplicate note.
+  include line (`@AGENTS.md`).
 - When adding, moving, or deleting an `AGENTS.md`, make the matching
   `CLAUDE.md` change in the same commit.
 - Never write rules into `CLAUDE.md`, `README.md`, or code comments that
@@ -94,6 +94,11 @@ and must stay out of commits.
   for every monitored project: bump/consider `schema_version`, update
   `templates/AGENTS.md` and `README.md` in the same commit, and say so in
   the commit message.
+- Generic workflow improvements discovered in adopted projects (command
+  blocks, evidence conventions, query patterns) belong back in
+  `templates/AGENTS.md` and the README onboarding snippet: harvest them in
+  one commit and say so in the commit message, so other projects can
+  re-diff the template. Do not leave them only in one project's copy.
 - Keep `bin/hub.py` a single file until a real second consumer forces a
   split; keep diffs small and reviewable.
 - Config knobs are documented in `README.md`; when adding one, update the
