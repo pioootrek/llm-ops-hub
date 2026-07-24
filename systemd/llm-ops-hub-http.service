@@ -1,0 +1,21 @@
+[Unit]
+Description=LLM Ops Hub HTTP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llm-ops-hub
+Group=llm-ops-hub
+WorkingDirectory=/var/lib/llm-ops-hub
+ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0 --directory /var/lib/llm-ops-hub/public
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/llm-ops-hub
+
+[Install]
+WantedBy=multi-user.target

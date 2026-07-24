@@ -1,0 +1,24 @@
+{
+  "build": {
+    "releases_keep": 20
+  },
+  "paths": {
+    "cache": "{root}/cache",
+    "mirror": "{root}/mirror.git",
+    "public": "{root}/public",
+    "releases": "{root}/public_releases",
+    "root": "~/.local/share/llm-ops-hub"
+  },
+  "project": {
+    "backlog_dir": "docs/backlog",
+    "backlog_ref": "main",
+    "github_repo": "acme/example-project",
+    "name": "Example Project",
+    "repo_url": "git@github.com:acme/example-project.git"
+  },
+  "schema_version": 1,
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  }
+}

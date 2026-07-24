@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Runtime/generated state
+mirror.git/
+cache/
+logs/
+public
+public.next
+public_releases/
+
+# Local credentials/config should never be committed.
+.config/
+.env
+.env.*
+config.json
+
+# Local dev
+.venv/
+config.local.json
