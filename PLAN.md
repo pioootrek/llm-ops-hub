@@ -71,11 +71,11 @@ into a venv, use the existing interface, and fail on the resulting project
 diff:
 
 ```sh
-python3 -m venv .backlog-hub/.venv
-.backlog-hub/.venv/bin/python -m pip install -r .backlog-hub/requirements.txt
-.backlog-hub/.venv/bin/python .backlog-hub/bin/hub.py fmt --backlog-dir docs/backlog
+python3 -m venv .llm-ops-hub/.venv
+.llm-ops-hub/.venv/bin/python -m pip install -r .llm-ops-hub/requirements.txt
+.llm-ops-hub/.venv/bin/python .llm-ops-hub/bin/hub.py fmt --backlog-dir docs/backlog
 git diff --exit-code
-.backlog-hub/.venv/bin/python .backlog-hub/bin/hub.py validate --backlog-dir docs/backlog
+.llm-ops-hub/.venv/bin/python .llm-ops-hub/bin/hub.py validate --backlog-dir docs/backlog
 ```
 
 The workflow template must include the separate checkout step; the marked

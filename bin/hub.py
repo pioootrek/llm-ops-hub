@@ -160,7 +160,7 @@ def load_hub_config(explicit: str | None) -> dict[str, Any]:
         Path(explicit).expanduser() if explicit else None,
         Path(os.environ["BACKLOG_HUB_CONFIG"]).expanduser() if os.environ.get("BACKLOG_HUB_CONFIG") else None,
         TOOL_ROOT / "config.json",
-        Path.home() / "winpath-hub" / "config.json",
+        Path.home() / ".local" / "share" / "llm-ops-hub" / "config.json",
     ]
     for candidate in candidates:
         if candidate and candidate.is_file():
@@ -177,7 +177,7 @@ def _resolve_hub_config(path: Path, raw: Any) -> dict[str, Any]:
         raise ConfigError(f"{path}: project.repo_url is required")
 
     paths_raw = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
-    root = Path(str(paths_raw.get("root", "~/winpath-hub"))).expanduser()
+    root = Path(str(paths_raw.get("root", "~/.local/share/llm-ops-hub"))).expanduser()
 
     def resolve(key: str, default: str) -> Path:
         value = str(paths_raw.get(key, default)).replace("{root}", str(root))
@@ -1081,12 +1081,12 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{h(title)} · {h(project_name)} Backlog Hub</title>
+<title>{h(title)} · {h(project_name)} · LLM Ops Hub</title>
 <link rel="stylesheet" href="assets/styles.css{h(css_version)}">
 </head>
 <body>
 <header>
-  <div><strong>{h(project_name)} Backlog Hub</strong><span>read-only · git is the source of truth</span></div>
+  <div><strong>{h(project_name)} · LLM Ops Hub</strong><span>read-only · git is the source of truth</span></div>
   <nav>{nav}</nav>
 </header>
 <main>
@@ -2327,6 +2327,9 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
     assert cfg["project"]["backlog_dir"] == "docs/backlog", "backlog_dir default wrong"
     assert cfg["build"]["releases_keep"] == 20, "releases_keep default must be 20"
+    assert cfg["paths"]["root"] == Path.home() / ".local" / "share" / "llm-ops-hub", (
+        "runtime root default must use the generic LLM Ops Hub data directory"
+    )
     assert cfg["paths"]["mirror"] == cfg["paths"]["root"] / "mirror.git", "mirror default must live under root"
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "x"}, "build": {"releases_keep": -5}})
     assert cfg["build"]["releases_keep"] == 0, "negative releases_keep must clamp to 0"

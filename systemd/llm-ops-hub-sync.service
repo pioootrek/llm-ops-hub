@@ -1,0 +1,17 @@
+[Unit]
+Description=Build LLM Ops Hub static site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=llm-ops-hub
+Group=llm-ops-hub
+Environment=BACKLOG_HUB_CONFIG=/etc/llm-ops-hub/config.json
+WorkingDirectory=/opt/llm-ops-hub
+ExecStart=/opt/llm-ops-hub/bin/sync_hub.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/llm-ops-hub

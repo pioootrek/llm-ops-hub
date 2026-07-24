@@ -1,12 +1,12 @@
-# Backlog Ops Hub
+# LLM Ops Hub
 
 A generic, read-only hub for **backlog-as-code**: the monitored project keeps
 its backlog as a Git-backed JSON pseudo-database, and this tool renders it as
 static HTML for humans and JSON for agents - from outside the project
 checkout, through a bare mirror, with no worktrees and no write path.
 
-Currently deployed for WinPath; intended to go open source once the contract
-stabilizes.
+The hub is project-agnostic: project identity, repository location, backlog
+ref, and runtime paths all come from instance configuration.
 
 ## The model in one minute
 
@@ -179,7 +179,7 @@ machines that juggle many projects (the dedicated LAN worker in section 3
 is the one place a system-wide install is acceptable):
 
 ```bash
-git clone <this-repo-url> ~/tools/backlog-hub && cd ~/tools/backlog-hub
+git clone <this-repo-url> ~/tools/llm-ops-hub && cd ~/tools/llm-ops-hub
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python bin/hub.py self-test
 ```
@@ -189,12 +189,12 @@ Then, inside the project repo:
 ```bash
 mkdir -p docs/backlog/feature docs/backlog/fix docs/backlog/rework \
          docs/backlog/security docs/backlog/done docs/backlog/notes
-cp ~/tools/backlog-hub/templates/AGENTS.md \
-   ~/tools/backlog-hub/templates/CLAUDE.md \
-   ~/tools/backlog-hub/templates/config.json docs/backlog/
+cp ~/tools/llm-ops-hub/templates/AGENTS.md \
+   ~/tools/llm-ops-hub/templates/CLAUDE.md \
+   ~/tools/llm-ops-hub/templates/config.json docs/backlog/
 $EDITOR docs/backlog/config.json     # set this project's areas enum
-~/tools/backlog-hub/.venv/bin/python ~/tools/backlog-hub/bin/hub.py fmt      --backlog-dir docs/backlog
-~/tools/backlog-hub/.venv/bin/python ~/tools/backlog-hub/bin/hub.py validate --backlog-dir docs/backlog
+~/tools/llm-ops-hub/.venv/bin/python ~/tools/llm-ops-hub/bin/hub.py fmt      --backlog-dir docs/backlog
+~/tools/llm-ops-hub/.venv/bin/python ~/tools/llm-ops-hub/bin/hub.py validate --backlog-dir docs/backlog
 git add docs/backlog && git commit -m "Adopt backlog-as-code"
 ```
 
@@ -267,7 +267,7 @@ checkout) so agents do not hard-code a machine-specific location.
 On the LAN machine that renders and serves the site:
 
 ```bash
-git clone <this-repo-url> && cd backlog-hub
+git clone <this-repo-url> && cd llm-ops-hub
 python3 -m pip install -r requirements.txt   # jsonschema; Python 3.9+
 python3 bin/hub.py self-test                 # no config or network needed
 cp config.example.json config.json && $EDITOR config.json
@@ -304,7 +304,7 @@ issues), `done.html` (completed work grouped by month), and
 
 Hub instance config is JSON, resolved from `--config`, then the
 `BACKLOG_HUB_CONFIG` env var, then `config.json` next to the tool, then
-`~/winpath-hub/config.json`. This repo's
+`~/.local/share/llm-ops-hub/config.json`. This repo's
 [config.example.json](config.example.json) is the reference example; copy it
 to `config.json` for a local or deployment-specific instance.
 
@@ -315,7 +315,7 @@ to `config.json` for a local or deployment-specific instance.
 | `project.backlog_dir` | backlog path inside the repo | `docs/backlog` |
 | `project.github_repo` | `owner/repo` enabling the feedback loop (buttons on item cards, open `backlog-feedback` issues on the dashboard); omit to skip it (no `gh` needed) | unset |
 | `project.name` | display name in the rendered site | `Backlog` |
-| `paths.root` | runtime root | `~/winpath-hub` |
+| `paths.root` | runtime root | `~/.local/share/llm-ops-hub` |
 | `paths.mirror` / `cache` / `releases` / `public` | each path individually overridable; `{root}` placeholder supported | `{root}/...` |
 | `server.host` / `server.port` | for `hub.py serve` | `127.0.0.1` / `8080` |
 | `build.releases_keep` | how many release directories to keep after a successful build (`0` = keep all) | `20` |
@@ -356,7 +356,5 @@ applies to this repo and to the template pack shipped to projects.
 
 ## Status
 
-- No open-source license chosen yet; rebranding happens at open-sourcing
-  time.
-- The migration of WinPath's legacy markdown backlog to this contract is
-  tracked separately.
+- No open-source license has been chosen yet.
+- The repository and bundled examples are project-agnostic.

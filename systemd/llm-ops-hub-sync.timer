@@ -1,5 +1,5 @@
 [Unit]
-Description=Run WinPath LAN Hub sync every 2 minutes
+Description=Run LLM Ops Hub sync every 2 minutes
 
 [Timer]
 OnBootSec=1min

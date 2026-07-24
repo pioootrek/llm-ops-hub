@@ -4,7 +4,7 @@ hub tool itself). The guide for projects whose backlog the hub monitors is
 templates/AGENTS.md.
 -->
 
-# Backlog Ops Hub - Repository Guide
+# LLM Ops Hub - Repository Guide
 
 Status: active
 Audience: LLM agents and humans changing the hub tool
@@ -12,7 +12,7 @@ Source of truth: operating rules and invariants for this codebase
 
 ## What this repository is
 
-A generic, read-only backlog hub. Monitored projects keep their backlog as a
+A generic, read-only backlog hub for LLM-assisted operations. Monitored projects keep their backlog as a
 Git-backed JSON pseudo-database (one canonical JSON file per item, validated
 against a JSON Schema, mutated only by commits to one configured ref). This
 tool mirrors the project repo, validates the contract, and renders static
