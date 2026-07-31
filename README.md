@@ -71,6 +71,22 @@ replacement for comments - with an optional `author` (`human:<name>` /
 `agent:<name>`); human-authored notes render highlighted as direction for
 agents.
 
+An open item may optionally carry a time-bounded risk decision:
+
+```json
+"risk_acceptance": {
+  "approved_by": "human:security-owner",
+  "approved_on": "2026-07-31",
+  "expires_on": "2026-08-14",
+  "rationale": "Mitigation is scheduled after the pilot.",
+  "scope": ["Only the report-only preview scan finding."]
+}
+```
+
+The Hub derives `active`, `expiring`, or `expired` from `expires_on`, exposes
+that state in the backlog view, and never treats the item as completed. The
+project repository remains the only place where the decision can be changed.
+
 ## Done entries
 
 Completed work is the second record type: `done/DONE-YYYYMMDD-slug.json`,

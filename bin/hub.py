@@ -1148,7 +1148,7 @@ CSS = (
     'border-radius:6px;background:var(--surface);color:var(--foreground);padding:0 10px;font:inherit;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none}'
     '.button:hover{background:var(--surface-hover)}.button.primary{background:var(--foreground);color:var(--on-strong);border-color:var(--foreground)}.button:focus-visible,'
     '.control input:focus,.control select:focus{outline:2px solid var(--ring);outline-offset:2px}'
-    '.toolbar{display:grid;grid-template-columns:minmax(220px,1.6fr) repeat(4,minmax(112px,1fr)) minmax(150px,1.15fr) 84px auto;'
+    '.toolbar{display:grid;grid-template-columns:minmax(220px,1.6fr) repeat(5,minmax(112px,1fr)) minmax(150px,1.15fr) 84px auto;'
     'gap:8px;align-items:end;margin:0 0 12px}.control{display:grid;gap:4px}.control label{color:var(--label);font-size:11px;font-weight:600}'
     '.control input,.control select{height:32px;width:100%;border:1px solid var(--border);border-radius:6px;background:var(--surface);'
     'color:var(--foreground);padding:0 8px;font:inherit;font-size:13px}.toolbar-actions{display:flex;gap:6px;align-items:end;justify-content:flex-end}'
@@ -1200,6 +1200,7 @@ CSS = (
 
 
 STALE_AFTER_DAYS = 45
+RISK_ACCEPTANCE_EXPIRING_DAYS = 14
 
 FEEDBACK_LABEL = "backlog-feedback"
 
@@ -1214,6 +1215,32 @@ def feedback_issue_url(github_repo: str, item_id: str, action: str, payload_hint
         "body": f"item: {item_id}\naction: {action}\npayload: {payload_hint}\n",
     })
     return f"https://github.com/{github_repo}/issues/new?{query}"
+
+
+def risk_acceptance_state(item: dict[str, Any], today: dt.date) -> str:
+    acceptance = item.get("risk_acceptance")
+    if not isinstance(acceptance, dict):
+        return "none"
+    try:
+        expires_on = dt.date.fromisoformat(str(acceptance["expires_on"]))
+    except (KeyError, TypeError, ValueError):
+        return "invalid"
+    days_remaining = (expires_on - today).days
+    if days_remaining < 0:
+        return "expired"
+    if days_remaining <= RISK_ACCEPTANCE_EXPIRING_DAYS:
+        return "expiring"
+    return "active"
+
+
+def risk_acceptance_pill(state: str) -> str:
+    tone = {
+        "active": "risk-low",
+        "expiring": "risk-medium",
+        "expired": "risk-high",
+        "invalid": "risk-high",
+    }.get(state, "")
+    return f'<span class="pill {tone}">risk acceptance: {h(state)}</span>'
 
 
 def item_detail(
@@ -1234,6 +1261,19 @@ def item_detail(
     ) + "</p>"
     if risk.get("rollback"):
         body += f"<p><strong>Rollback:</strong> {h(risk['rollback'])}</p>"
+    acceptance = item.get("risk_acceptance")
+    if isinstance(acceptance, dict) and today is not None:
+        acceptance_state = risk_acceptance_state(item, today)
+        body += "<h3>risk acceptance</h3>"
+        body += (
+            f"<p>{risk_acceptance_pill(acceptance_state)}"
+            f"<span class=pill>expires {h(acceptance.get('expires_on', ''))}</span></p>"
+            f"<p><strong>Approved by:</strong> {h(acceptance.get('approved_by', ''))}"
+            f" on {h(acceptance.get('approved_on', ''))}</p>"
+            f"<p><strong>Rationale:</strong> {h(acceptance.get('rationale', ''))}</p>"
+            "<h3>accepted scope</h3>"
+            + paragraphs(acceptance.get("scope", []))
+        )
     if item.get("notes"):
         def note_html(note: dict[str, Any]) -> str:
             author = note.get("author", "")
@@ -1264,6 +1304,10 @@ def item_detail(
     meta_pills.append(f"<span class=pill>{h(created_label)}</span>")
     if stale:
         meta_pills.append('<span class="pill stale" title="no note or edit in over 45 days">stale</span>')
+    if today is not None:
+        acceptance_state = risk_acceptance_state(item, today)
+        if acceptance_state != "none":
+            meta_pills.append(risk_acceptance_pill(acceptance_state))
     meta = " ".join(meta_pills)
     if github_repo:
         body += "<h3>feedback</h3><p class=item-actions>" + "".join(
@@ -1514,10 +1558,14 @@ def render_site(
     by_status: dict[str, int] = {}
     by_priority: dict[str, int] = {}
     high_risk = 0
+    acceptance_counts: dict[str, int] = {}
     for item in active_items:
         by_status[item["status"]] = by_status.get(item["status"], 0) + 1
         by_priority[item["priority"]] = by_priority.get(item["priority"], 0) + 1
         high_risk += item["risk"]["level"] == "high"
+        acceptance_state = risk_acceptance_state(item, today)
+        if acceptance_state != "none":
+            acceptance_counts[acceptance_state] = acceptance_counts.get(acceptance_state, 0) + 1
 
     def pills(counter: dict[str, int]) -> str:
         return "".join(f"<span class=pill>{h(k)}: {v}</span>" for k, v in sorted(counter.items()))
@@ -1528,7 +1576,12 @@ def render_site(
     )
     home = [
         card("Backlog", f"<p>{len(active_items)} active items from <code>{h(project['backlog_dir'])}</code>.</p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p>{archived_note}<p><a href=backlog.html>Open backlog →</a></p>"),
-        card("Risk", f"<p>{high_risk} high-risk item(s).</p><p><a href=\"backlog.html?risk=high\">View high-risk →</a></p>"),
+        card(
+            "Risk",
+            f"<p>{high_risk} high-risk item(s).</p>"
+            f"<p>{pills(acceptance_counts) or '<span class=muted>No risk acceptances.</span>'}</p>"
+            '<p><a href="backlog.html?risk=high">View high-risk →</a></p>',
+        ),
         card("Done", f"<p>{len(done_entries)} completed-work entries ({latest_done}).</p><p><a href=done.html>View done →</a></p>"),
         card("Notes", (
             f"<p>{sum(1 for n in notes if n['status'] == 'active')} active agent note(s)"
@@ -1590,6 +1643,8 @@ def render_site(
     rows = []
     for idx, item in enumerate(items):
         risk_class = f"risk-{h(item['risk']['level'])}"
+        acceptance_state = risk_acceptance_state(item, today)
+        acceptance = item.get("risk_acceptance") if isinstance(item.get("risk_acceptance"), dict) else {}
         active_class = " active" if idx == 0 else ""
         search_text = " ".join(
             [
@@ -1604,6 +1659,13 @@ def render_site(
                 *prose_values(item, "problem"),
                 *prose_values(item, "value"),
                 *prose_values(item, "scope"),
+                str(acceptance.get("approved_by", "")),
+                str(acceptance.get("rationale", "")),
+                *(
+                    acceptance.get("scope", [])
+                    if isinstance(acceptance.get("scope"), list)
+                    else []
+                ),
             ]
         )
         rows.append(
@@ -1611,12 +1673,15 @@ def render_site(
             f" data-title=\"{h(item['title'].lower())}\" data-type=\"{h(item['type'])}\""
             f" data-area=\"{h(item['area'])}\" data-priority=\"{h(item['priority'])}\""
             f" data-status=\"{h(item['status'])}\" data-risk=\"{h(item['risk']['level'])}\""
+            f" data-acceptance=\"{h(acceptance_state)}\""
             f" data-created=\"{h(item['created'])}\" data-search=\"{h(search_text.lower())}\" tabindex=\"0\">"
             f"<td><strong><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['id'])}</a></strong>"
             f"<div class=muted>{h(item['_path'])}</div></td>"
             f"<td><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['title'])}</a></td>"
             f"<td>{h(item['type'])}</td><td>{h(item['area'])}</td>"
-            f"<td>{h(item['priority'])}</td><td>{h(item['status'])}</td>"
+            f"<td>{h(item['priority'])}</td><td>{h(item['status'])}"
+            + (risk_acceptance_pill(acceptance_state) if acceptance_state != "none" else "")
+            + "</td>"
             f"<td class=risk-cell><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
         )
     detail_cards = "".join(
@@ -1638,6 +1703,7 @@ def render_site(
     priority_options = options(["now", "next", "later"])
     status_options = options(["open", "in-progress", "blocked", "archived"], label="Active")
     risk_options = options(["high", "medium", "low"])
+    acceptance_options = options(["none", "active", "expiring", "expired", "invalid"])
     backlog_script = """
 <script>
 document.documentElement.classList.add("js");
@@ -1658,12 +1724,13 @@ document.documentElement.classList.add("js");
     priority: document.getElementById("filter-priority"),
     status: document.getElementById("filter-status"),
     risk: document.getElementById("filter-risk"),
+    acceptance: document.getElementById("filter-acceptance"),
     sort: document.getElementById("sort-by"),
     dir: document.getElementById("sort-dir"),
   };
   const priorityRank = { now: 0, next: 1, later: 2 };
   const riskRank = { high: 0, medium: 1, low: 2 };
-  const paramMap = { q: "query", type: "type", area: "area", priority: "priority", status: "status", risk: "risk", sort: "sort", dir: "dir" };
+  const paramMap = { q: "query", type: "type", area: "area", priority: "priority", status: "status", risk: "risk", acceptance: "acceptance", sort: "sort", dir: "dir" };
   let detailsOpen = true;
   if (!rows.length || !details.length || !shell || !tbody) return;
   form?.addEventListener("submit", (event) => event.preventDefault());
@@ -1727,7 +1794,8 @@ document.documentElement.classList.add("js");
       && (!controls.area?.value || row.dataset.area === controls.area.value)
       && (!controls.priority?.value || row.dataset.priority === controls.priority.value)
       && (status ? row.dataset.status === status : row.dataset.status !== "archived")
-      && (!controls.risk?.value || row.dataset.risk === controls.risk.value);
+      && (!controls.risk?.value || row.dataset.risk === controls.risk.value)
+      && (!controls.acceptance?.value || row.dataset.acceptance === controls.acceptance.value);
   }
 
   function applyListState() {
@@ -1779,7 +1847,7 @@ document.documentElement.classList.add("js");
     if (requestedRow || firstVisible) showDetail((requestedRow || firstVisible).dataset.itemId, true);
   });
   clearFilters?.addEventListener("click", () => {
-    ["query", "type", "area", "priority", "status", "risk"].forEach((key) => {
+    ["query", "type", "area", "priority", "status", "risk", "acceptance"].forEach((key) => {
       if (controls[key]) controls[key].value = "";
     });
     if (controls.sort) controls.sort.value = "order";
@@ -1816,6 +1884,7 @@ document.documentElement.classList.add("js");
         f'<div class=control><label for=filter-priority>Priority</label><select id=filter-priority>{priority_options}</select></div>'
         f'<div class=control><label for=filter-status>Status</label><select id=filter-status>{status_options}</select></div>'
         f'<div class=control><label for=filter-risk>Risk</label><select id=filter-risk>{risk_options}</select></div>'
+        f'<div class=control><label for=filter-acceptance>Risk acceptance</label><select id=filter-acceptance>{acceptance_options}</select></div>'
         '<div class=control><label for=sort-by>Sort</label><select id=sort-by>'
         '<option value=order>Default</option><option value=priority>Priority</option><option value=risk>Risk</option>'
         '<option value=status>Status</option><option value=type>Type</option><option value=area>Area</option>'
@@ -2096,6 +2165,36 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     bad = json.loads(good)
     del bad["risk"]["rollback"]
     expect_error({"feature/FEAT-20260703-sample-item.json": canonical_json(bad)}, "rollback")
+
+    accepted = json.loads(good)
+    accepted["risk_acceptance"] = {
+        "approved_by": "human:security-owner",
+        "approved_on": "2026-07-03",
+        "expires_on": "2026-07-31",
+        "rationale": "Time-bounded self-test decision.",
+        "scope": ["Only the self-test fixture."],
+    }
+    _, errs = validate_items(
+        _MemorySource({"feature/FEAT-20260703-sample-item.json": canonical_json(accepted)}),
+        schema,
+        {},
+    )
+    assert not errs, f"valid risk acceptance reported errors: {errs}"
+    assert risk_acceptance_state(accepted, dt.date(2026, 7, 1)) == "active"
+    assert risk_acceptance_state(accepted, dt.date(2026, 7, 20)) == "expiring"
+    assert risk_acceptance_state(accepted, dt.date(2026, 8, 1)) == "expired"
+    accepted["_path"] = "feature/FEAT-20260703-sample-item.json"
+    accepted["risk_acceptance"]["rationale"] = "Contains <untrusted> text."
+    accepted_html = item_detail(accepted, today=dt.date(2026, 7, 20))
+    assert "risk acceptance: expiring" in accepted_html
+    assert "&lt;untrusted&gt;" in accepted_html and "<untrusted>" not in accepted_html
+    bad_acceptance = json.loads(canonical_json(accepted))
+    del bad_acceptance["_path"]
+    del bad_acceptance["risk_acceptance"]["approved_by"]
+    expect_error(
+        {"feature/FEAT-20260703-sample-item.json": canonical_json(bad_acceptance)},
+        "approved_by",
+    )
 
     expect_error({"security/FEAT-20260703-sample-item.json": good}, "file must be at")
 

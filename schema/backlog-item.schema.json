@@ -138,6 +138,39 @@
       },
       "type": "object"
     },
+    "risk_acceptance": {
+      "additionalProperties": false,
+      "description": "Optional, time-bounded acceptance of the item's known risk. Expiry state is derived from expires_on; the backlog item remains open until completed.",
+      "properties": {
+        "approved_by": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "approved_on": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "type": "string"
+        },
+        "expires_on": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/paragraphs"
+        }
+      },
+      "required": [
+        "approved_by",
+        "approved_on",
+        "expires_on",
+        "rationale",
+        "scope"
+      ],
+      "type": "object"
+    },
     "schema_version": {
       "const": 1
     },

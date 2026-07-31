@@ -77,6 +77,9 @@ Fields (full contract in `schema.json`):
   `created` (YYYY-MM-DD), `source` (where the item came from)
 - `risk`: `{level, dimensions[], rollback}` - **mandatory risk assessment**;
   `rollback` is required for `medium` and `high`
+- `risk_acceptance`: optional time-bounded decision on the same open item:
+  `{approved_by, approved_on, expires_on, rationale, scope[]}`. It records an
+  accepted risk, never removes the finding, and stops applying after expiry
 - prose as paragraph arrays: `problem`, `value`, `scope`, `validation`,
   optional `trigger`
 - `notes`: optional dated entries `{date, text, author?}` for blockers,
