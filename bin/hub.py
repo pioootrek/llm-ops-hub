@@ -1325,6 +1325,47 @@ def item_detail(
     )
 
 
+def backlog_row(item: dict[str, Any], idx: int, today: dt.date) -> str:
+    risk_class = f"risk-{h(item['risk']['level'])}"
+    acceptance_state = risk_acceptance_state(item, today)
+    acceptance = item.get("risk_acceptance") if isinstance(item.get("risk_acceptance"), dict) else {}
+    active_class = " active" if idx == 0 else ""
+    search_text = " ".join(
+        [
+            item["id"],
+            item["title"],
+            item["type"],
+            item["area"],
+            item["priority"],
+            item["status"],
+            item["risk"]["level"],
+            item["_path"],
+            *prose_values(item, "problem"),
+            *prose_values(item, "value"),
+            *prose_values(item, "scope"),
+            str(acceptance.get("approved_by", "")),
+            str(acceptance.get("rationale", "")),
+            *(acceptance.get("scope", []) if isinstance(acceptance.get("scope"), list) else []),
+        ]
+    )
+    return (
+        f"<tr class=\"item-row{active_class}\" data-item-id=\"{h(item['id'])}\" data-order=\"{idx}\""
+        f" data-title=\"{h(item['title'].lower())}\" data-type=\"{h(item['type'])}\""
+        f" data-area=\"{h(item['area'])}\" data-priority=\"{h(item['priority'])}\""
+        f" data-status=\"{h(item['status'])}\" data-risk=\"{h(item['risk']['level'])}\""
+        f" data-acceptance=\"{h(acceptance_state)}\""
+        f" data-created=\"{h(item['created'])}\" data-search=\"{h(search_text.lower())}\" tabindex=\"0\">"
+        f"<td><strong><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['id'])}</a></strong>"
+        f"<div class=muted>{h(item['_path'])}</div></td>"
+        f"<td><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['title'])}</a></td>"
+        f"<td>{h(item['type'])}</td><td>{h(item['area'])}</td>"
+        f"<td>{h(item['priority'])}</td><td>{h(item['status'])}"
+        + (risk_acceptance_pill(acceptance_state) if acceptance_state != "none" else "")
+        + "</td>"
+        f"<td class=risk-cell><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
+    )
+
+
 NOTE_ENVELOPE_KEYS = {"schema_version", "id", "title", "created", "author", "status", "tags", "body", "_path", "_files"}
 NOTE_RENDER_TEXT_LIMIT = 20000
 
@@ -1640,50 +1681,7 @@ def render_site(
         encoding="utf-8",
     )
 
-    rows = []
-    for idx, item in enumerate(items):
-        risk_class = f"risk-{h(item['risk']['level'])}"
-        acceptance_state = risk_acceptance_state(item, today)
-        acceptance = item.get("risk_acceptance") if isinstance(item.get("risk_acceptance"), dict) else {}
-        active_class = " active" if idx == 0 else ""
-        search_text = " ".join(
-            [
-                item["id"],
-                item["title"],
-                item["type"],
-                item["area"],
-                item["priority"],
-                item["status"],
-                item["risk"]["level"],
-                item["_path"],
-                *prose_values(item, "problem"),
-                *prose_values(item, "value"),
-                *prose_values(item, "scope"),
-                str(acceptance.get("approved_by", "")),
-                str(acceptance.get("rationale", "")),
-                *(
-                    acceptance.get("scope", [])
-                    if isinstance(acceptance.get("scope"), list)
-                    else []
-                ),
-            ]
-        )
-        rows.append(
-            f"<tr class=\"item-row{active_class}\" data-item-id=\"{h(item['id'])}\" data-order=\"{idx}\""
-            f" data-title=\"{h(item['title'].lower())}\" data-type=\"{h(item['type'])}\""
-            f" data-area=\"{h(item['area'])}\" data-priority=\"{h(item['priority'])}\""
-            f" data-status=\"{h(item['status'])}\" data-risk=\"{h(item['risk']['level'])}\""
-            f" data-acceptance=\"{h(acceptance_state)}\""
-            f" data-created=\"{h(item['created'])}\" data-search=\"{h(search_text.lower())}\" tabindex=\"0\">"
-            f"<td><strong><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['id'])}</a></strong>"
-            f"<div class=muted>{h(item['_path'])}</div></td>"
-            f"<td><a class=\"item-title-link\" href=\"#{h(item['id'])}\">{h(item['title'])}</a></td>"
-            f"<td>{h(item['type'])}</td><td>{h(item['area'])}</td>"
-            f"<td>{h(item['priority'])}</td><td>{h(item['status'])}"
-            + (risk_acceptance_pill(acceptance_state) if acceptance_state != "none" else "")
-            + "</td>"
-            f"<td class=risk-cell><span class=\"pill {risk_class}\">{h(item['risk']['level'])}</span></td></tr>"
-        )
+    rows = [backlog_row(item, idx, today) for idx, item in enumerate(items)]
     detail_cards = "".join(
         item_detail(item, active=idx == 0, github_repo=project["github_repo"], today=today)
         for idx, item in enumerate(items)
@@ -2212,10 +2210,14 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert not errs, f"archived item with authored note reported errors: {errs}"
 
     unsafe_item = json.loads(good)
-    unsafe_item["title"] = '<script>alert("item")</script>'
+    unsafe_item["title"] = '<script>alert("item")</script> x" onfocus="alert(1)'
+    unsafe_item["_path"] = "feature/FEAT-20260703-sample-item.json"
     unsafe_item_html = item_detail(unsafe_item, today=dt.date(2026, 7, 10))
-    assert '&lt;script&gt;alert(&quot;item&quot;)&lt;/script&gt;' in unsafe_item_html
+    assert '&lt;script&gt;alert(&quot;item&quot;)&lt;/script&gt; x&quot; onfocus=&quot;alert(1)' in unsafe_item_html
     assert '<script>alert("item")</script>' not in unsafe_item_html, "item title must be HTML-escaped"
+    unsafe_item_row = backlog_row(unsafe_item, 0, dt.date(2026, 7, 10))
+    assert 'data-title="&lt;script&gt;alert(&quot;item&quot;)&lt;/script&gt; x&quot; onfocus=&quot;alert(1)"' in unsafe_item_row
+    assert 'x" onfocus="alert(1)' not in unsafe_item_row, "backlog row attributes must escape quotes"
 
     bad = json.loads(good)
     bad["notes"][0]["author"] = ""
@@ -2242,6 +2244,12 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     )
     assert any("date part" in e for e in errs), f"done id/date rule not enforced: {errs}"
 
+    unsafe_done = json.loads(good_done)
+    unsafe_done["title"] = 'x" onfocus="alert(1)'
+    unsafe_done_html = done_detail(unsafe_done)
+    assert 'data-done-search="' in unsafe_done_html and 'x&quot; onfocus=&quot;alert(1)' in unsafe_done_html
+    assert 'x" onfocus="alert(1)' not in unsafe_done_html, "done entry attributes must escape quotes"
+
     note_schema = parse_json(str(BUNDLED_NOTE_SCHEMA), BUNDLED_NOTE_SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(note_schema)
     good_note = canonical_json(SAMPLE_NOTE)
@@ -2257,13 +2265,17 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert parsed_notes[0]["_files"] == ["findings.md", "shot.png"], f"payload listing wrong: {parsed_notes[0]['_files']}"
 
     unsafe_note = dict(parsed_notes[0])
-    unsafe_note["body"] = '<script>alert("note")</script>'
+    unsafe_note["body"] = '<script>alert("note")</script> x" onfocus="alert(1)'
+    unsafe_image = 'shot" onerror="alert(1).png'
+    unsafe_note["_files"] = [unsafe_image]
     unsafe_note_html = note_detail(unsafe_note, payloads={
-        f"{note_dir}/findings.md": b"safe payload",
-        f"{note_dir}/shot.png": b"\x89PNG fake image bytes",
+        f"{note_dir}/{unsafe_image}": b"\x89PNG fake image bytes",
     })
     assert '&lt;script&gt;alert(&quot;note&quot;)&lt;/script&gt;' in unsafe_note_html
     assert '<script>alert("note")</script>' not in unsafe_note_html, "note body must be HTML-escaped"
+    assert 'data-note-search="' in unsafe_note_html and '&quot; onfocus=\\&quot;alert(1)' in unsafe_note_html
+    assert 'src="notes/NOTE-20260703-sample-finding/shot&quot; onerror=&quot;alert(1).png"' in unsafe_note_html
+    assert 'shot" onerror="alert(1).png' not in unsafe_note_html, "note attributes must escape quotes"
 
     _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-wrong-dir/note.json": good_note}), note_schema)
     assert any("must match the directory name" in e for e in errs), f"note id/dir rule not enforced: {errs}"

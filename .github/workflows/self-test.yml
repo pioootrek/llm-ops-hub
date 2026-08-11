@@ -2,7 +2,12 @@ name: Self-test
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
