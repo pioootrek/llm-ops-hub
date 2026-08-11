@@ -7,6 +7,9 @@ git is the database, one canonical form, fail-closed build, minimal
 dependencies). This file extends `docs/proposals/2026-07-hub-improvements.md`;
 items already proposed or implemented from it are referenced, not repeated.
 
+Progress (2026-08-11): 1.1 (repository CI) and 1.3 (HTML escaping
+self-tests) are implemented.
+
 ## The rule: mega simple, mega functional
 
 The tool earns its keep by being small enough to audit in one sitting. Every

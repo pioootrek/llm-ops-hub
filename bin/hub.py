@@ -2211,6 +2211,12 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     _, errs = validate_items(_MemorySource({"feature/FEAT-20260703-sample-item.json": canonical_json(archived)}), schema, {})
     assert not errs, f"archived item with authored note reported errors: {errs}"
 
+    unsafe_item = json.loads(good)
+    unsafe_item["title"] = '<script>alert("item")</script>'
+    unsafe_item_html = item_detail(unsafe_item, today=dt.date(2026, 7, 10))
+    assert '&lt;script&gt;alert(&quot;item&quot;)&lt;/script&gt;' in unsafe_item_html
+    assert '<script>alert("item")</script>' not in unsafe_item_html, "item title must be HTML-escaped"
+
     bad = json.loads(good)
     bad["notes"][0]["author"] = ""
     expect_error({"feature/FEAT-20260703-sample-item.json": canonical_json(bad)}, "author")
@@ -2249,6 +2255,15 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert not errs, f"valid note dir reported errors: {errs}"
     assert parsed_notes[0]["id"] == "NOTE-20260703-sample-finding"
     assert parsed_notes[0]["_files"] == ["findings.md", "shot.png"], f"payload listing wrong: {parsed_notes[0]['_files']}"
+
+    unsafe_note = dict(parsed_notes[0])
+    unsafe_note["body"] = '<script>alert("note")</script>'
+    unsafe_note_html = note_detail(unsafe_note, payloads={
+        f"{note_dir}/findings.md": b"safe payload",
+        f"{note_dir}/shot.png": b"\x89PNG fake image bytes",
+    })
+    assert '&lt;script&gt;alert(&quot;note&quot;)&lt;/script&gt;' in unsafe_note_html
+    assert '<script>alert("note")</script>' not in unsafe_note_html, "note body must be HTML-escaped"
 
     _, errs = validate_notes(_MemorySource({"notes/NOTE-20260703-wrong-dir/note.json": good_note}), note_schema)
     assert any("must match the directory name" in e for e in errs), f"note id/dir rule not enforced: {errs}"
@@ -2374,6 +2389,36 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         f"active/reference pages older than the threshold must be overdue: {health['overdue']}"
     )
     assert health["missing_from_index"] == [], "no index file configured means no index findings"
+
+    unsafe_docs = [{
+        "dead_links": [],
+        "file": '<script>alert("file")</script>.md',
+        "header": {
+            "audience": "self-test readers",
+            "last_reviewed": "2026-07-01",
+            "source_of_truth": '<script>alert("docs")</script>',
+            "status": "active",
+        },
+        "missing_from_index": False,
+        "overdue": False,
+        "reviewed_days": 9,
+    }]
+    unsafe_docs_html = docs_health_body(
+        unsafe_docs,
+        {
+            "by_status": {"active": 1},
+            "dead_link_count": 0,
+            "missing_from_index": [],
+            "overdue": [],
+            "stale_days": 60,
+        },
+        {"dir": "docs", "index_file": "", "stale_days": 60},
+        {"backlog_ref": "main"},
+        "abc123",
+    )
+    assert '&lt;script&gt;alert(&quot;file&quot;)&lt;/script&gt;.md' in unsafe_docs_html
+    assert '&lt;script&gt;alert(&quot;docs&quot;)&lt;/script&gt;' in unsafe_docs_html
+    assert "<script>" not in unsafe_docs_html, "docs metadata must be HTML-escaped"
 
     assert docs_settings({}) is None, "docs module must default to disabled"
     settings = docs_settings({"docs_dir": "docs/", "docs_index_file": "playbooks.md"})
