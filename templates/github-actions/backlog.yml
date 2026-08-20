@@ -22,10 +22,10 @@ jobs:
 
     steps:
       - name: Check out project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check out pinned hub
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: pioootrek/llm-ops-hub
           ref: "<hub-ref>"

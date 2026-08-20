@@ -2344,7 +2344,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         'hub.py validate --backlog-dir docs/backlog',
     ]:
         assert required in ci_template, f"monitored-project CI template missing {required!r}"
-    assert ci_template.count("uses: actions/checkout@v4") == 2, "CI template needs separate project and hub checkouts"
+    assert ci_template.count("uses: actions/checkout@v7") == 2, "CI template needs separate project and hub checkouts"
     assert "ref: main" not in ci_template, "monitored-project CI must pin the hub version"
     fmt_pos = ci_template.index("hub.py fmt")
     diff_pos = ci_template.index("git diff --exit-code")
