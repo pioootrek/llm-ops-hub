@@ -796,6 +796,33 @@ def project_health(
     }
 
 
+def related_notes(
+    items: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+    source,
+) -> dict[str, list[dict[str, str]]]:
+    """Exact references from note manifests and text payloads to known items."""
+    item_ids = {item["id"] for item in items}
+    related: dict[str, list[dict[str, str]]] = {}
+    for note in notes:
+        manifest = {key: value for key, value in note.items() if not key.startswith("_")}
+        text = canonical_json(manifest)
+        for rel_file in note["_files"]:
+            if Path(rel_file).suffix.lower() not in NOTE_TEXT_SUFFIXES:
+                continue
+            file_rel = f"{note['_path']}/{rel_file}"
+            text += "\n" + source.read_bytes(file_rel).decode("utf-8", errors="replace")
+        for item_id in item_ids:
+            pattern = rf"(?<![A-Za-z0-9_-]){re.escape(item_id)}(?![A-Za-z0-9_-])"
+            if re.search(pattern, text):
+                related.setdefault(item_id, []).append({
+                    "id": note["id"],
+                    "path": note["_path"],
+                    "title": note["title"],
+                })
+    return related
+
+
 def build_index(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated_by": "hub.py fmt",
@@ -1366,6 +1393,7 @@ def item_detail(
     github_repo: str | None = None,
     today: dt.date | None = None,
     stale_days: int = HEALTH_STALE_DAYS_DEFAULT,
+    related: list[dict[str, str]] | None = None,
 ) -> str:
     body = paragraphs(item["problem"])
     for section in ["value", "scope", "validation", "trigger"]:
@@ -1399,6 +1427,11 @@ def item_detail(
             return f'<p class="{css_class}"><span class=muted>{label}</span> — {h(note["text"])}</p>'
 
         body += "<h3>notes</h3>" + "".join(note_html(note) for note in item["notes"])
+    if related:
+        body += "<h3>notes mentioning this item</h3><p>" + "".join(
+            f'<a class=pill href="notes.html#{h(note["id"])}">{h(note["id"])} · {h(note["title"])}</a>'
+            for note in related
+        ) + "</p>"
     links = item.get("links") or {}
     if links.get("prs") or links.get("related_ids"):
         def pr_pill(number: Any) -> str:
@@ -1736,6 +1769,7 @@ def render_site(
     docs_report = docs_health(docs, docs_source, docs_cfg, today) if with_docs else None
     health_cfg = health_settings(load_project_config(source))
     health = project_health(items, notes, health_cfg, today)
+    note_relations = related_notes(items, notes, source)
     index_data = {
         "backlog": items,
         "commit": commit,
@@ -1745,6 +1779,7 @@ def render_site(
         "generated_at": generated_at,
         "health": health,
         "notes": notes,
+        "related_notes": note_relations,
         "ref": project["backlog_ref"],
         "schema_version": 1,
     }
@@ -1864,7 +1899,14 @@ def render_site(
 
     rows = [backlog_row(item, idx, today) for idx, item in enumerate(items)]
     detail_cards = "".join(
-        item_detail(item, active=idx == 0, github_repo=project["github_repo"], today=today, stale_days=health_cfg["health_stale_days"])
+        item_detail(
+            item,
+            active=idx == 0,
+            github_repo=project["github_repo"],
+            today=today,
+            stale_days=health_cfg["health_stale_days"],
+            related=note_relations.get(item["id"], []),
+        )
         for idx, item in enumerate(items)
     )
     detail_pane = (
@@ -2491,6 +2533,26 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert parsed_notes[0]["id"] == "NOTE-20260703-sample-finding"
     assert parsed_notes[0]["_files"] == ["findings.md", "shot.png"], f"payload listing wrong: {parsed_notes[0]['_files']}"
 
+    relation_note = dict(parsed_notes[0])
+    relation_note["body"] = {"item": "FEAT-20260703-sample-item"}
+    relation_source = _MemorySource({
+        f"{note_dir}/findings.md": "FEAT-20260703-sample-item appears twice: FEAT-20260703-sample-item",
+        f"{note_dir}/shot.png": b"FEAT-20260703-sample-item in image bytes must be ignored",
+    })
+    relations = related_notes(items, [relation_note], relation_source)
+    assert relations == {
+        "FEAT-20260703-sample-item": [{
+            "id": relation_note["id"],
+            "path": relation_note["_path"],
+            "title": relation_note["title"],
+        }]
+    }, f"related note relation wrong: {relations}"
+    false_relation_note = dict(relation_note, body="xFEAT-20260703-sample-item-y", _files=["shot.png"])
+    assert related_notes(items, [false_relation_note], relation_source) == {}, "partial or image-only ID matched"
+    related_html = item_detail(items[0], related=[dict(relations["FEAT-20260703-sample-item"][0], title="<unsafe>")])
+    assert "notes mentioning this item" in related_html and "&lt;unsafe&gt;" in related_html
+    assert "<unsafe>" not in related_html
+
     reviewed_note = json.loads(good_note)
     reviewed_note["last_reviewed"] = "2026-07-10"
     reviewed_notes, errs = validate_notes(
@@ -2569,6 +2631,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         )
         rendered_index = parse_json("rendered index", (tmp_path / "site/data/index.json").read_text(encoding="utf-8"))
         assert rendered_index["health"]["item_findings"], "rendered index missing backlog health"
+        assert rendered_index["related_notes"] == {}, "unexpected rendered note relations"
         rendered_health = (tmp_path / "site/health.html").read_text(encoding="utf-8")
         assert "Backlog findings" in rendered_health and "Notes to review" in rendered_health
 

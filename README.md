@@ -131,6 +131,11 @@ through the feedback flow.
 `last_reviewed` is an optional `YYYY-MM-DD` date. Set it when an active note's
 facts have been checked again, and update it whenever those facts change.
 
+The build links notes back to backlog items when a note manifest or text
+payload contains the exact ID of an existing item. Images are not scanned, and
+ID-shaped text that does not match a current item stays plain text. The links
+appear on item cards and in `data/index.json` under `related_notes`.
+
 ## Docs pages (optional)
 
 The optional docs module covers playbooks, contracts, and reference pages.
@@ -362,8 +367,8 @@ including open feedback issues), `backlog.html` (table + item cards),
 issues), `done.html` (completed work grouped by month), `health.html`
 (report-only backlog and note findings), and
 `data/index.json` for agents (keys: `backlog` with the full items,
-`done`, `notes`, `health`, `feedback_issues`, `feedback_error`, `ref`, `commit`,
-`generated_at`).
+`done`, `notes`, `health`, `related_notes`, `feedback_issues`,
+`feedback_error`, `ref`, `commit`, `generated_at`).
 
 ## Configuration
 
