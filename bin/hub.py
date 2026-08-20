@@ -40,6 +40,7 @@ BUNDLED_SCHEMA = TOOL_ROOT / "schema" / "backlog-item.schema.json"
 BUNDLED_DONE_SCHEMA = TOOL_ROOT / "schema" / "done-entry.schema.json"
 BUNDLED_NOTE_SCHEMA = TOOL_ROOT / "schema" / "note.schema.json"
 BUNDLED_DOCS_SCHEMA = TOOL_ROOT / "schema" / "docs-header.schema.json"
+MONITORED_PROJECT_CI_TEMPLATE = TOOL_ROOT / "templates" / "github-actions" / "backlog.yml"
 
 TYPE_PREFIX = {"feature": "FEAT", "fix": "FIX", "rework": "RWK", "security": "SEC"}
 PRIORITY_ORDER = {"now": 0, "next": 1, "later": 2}
@@ -2169,6 +2170,26 @@ class _MemorySource:
 def cmd_self_test(_args: argparse.Namespace) -> int:
     schema = parse_json(str(BUNDLED_SCHEMA), BUNDLED_SCHEMA.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
+
+    ci_template = MONITORED_PROJECT_CI_TEMPLATE.read_text(encoding="utf-8")
+    for required in [
+        'paths:\n      - "docs/backlog/**"',
+        'permissions:\n  contents: read',
+        'repository: pioootrek/llm-ops-hub',
+        'ref: "<hub-ref>"',
+        'path: .llm-ops-hub',
+        'persist-credentials: false',
+        'hub.py fmt --backlog-dir docs/backlog',
+        'git diff --exit-code',
+        'hub.py validate --backlog-dir docs/backlog',
+    ]:
+        assert required in ci_template, f"monitored-project CI template missing {required!r}"
+    assert ci_template.count("uses: actions/checkout@v4") == 2, "CI template needs separate project and hub checkouts"
+    assert "ref: main" not in ci_template, "monitored-project CI must pin the hub version"
+    fmt_pos = ci_template.index("hub.py fmt")
+    diff_pos = ci_template.index("git diff --exit-code")
+    validate_pos = ci_template.index("hub.py validate")
+    assert fmt_pos < diff_pos < validate_pos, "CI template must check fmt changes before validate"
 
     good = canonical_json(SAMPLE_ITEM)
     assert canonical_json(parse_json("x", good)) == good, "canonical form must be idempotent"

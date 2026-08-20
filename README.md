@@ -222,6 +222,27 @@ short: edit files under `docs/backlog/`, run `fmt`, run `validate` and require
 exit code 0, then commit to the backlog branch. `fmt` canonicalizes files and
 regenerates `index.json`. Do not edit the index by hand.
 
+#### Check backlog pull requests in CI
+
+GitHub projects can copy the bundled workflow:
+
+```bash
+mkdir -p .github/workflows
+cp ~/tools/llm-ops-hub/templates/github-actions/backlog.yml \
+   .github/workflows/backlog.yml
+```
+
+Edit the copied file before committing it. Replace `<hub-ref>` with a released
+tag or full commit SHA, change the hub repository if you use a fork, and adjust
+every `docs/backlog` path if the project uses another `backlog_dir`. If the docs
+module is enabled, add its directory to the workflow's `paths` filter.
+
+The job runs only on matching pull requests. It checks out the pinned hub into
+`.llm-ops-hub`, installs its dependency in a temporary virtualenv, runs `fmt`,
+and fails if formatting changed the project. It then runs `validate`. Keep the
+hub ref pinned so an unchanged project does not pick up a new contract without
+an explicit update.
+
 ### 2. Onboard the project's agents
 
 Agents will not look into `docs/backlog/` on their own. The project's root
@@ -348,7 +369,7 @@ to `config.json` for a local or deployment-specific instance.
 bin/hub.py       the whole tool (fmt / validate / sync / build / serve / self-test)
 bin/sync_hub.sh  sync + build wrapper used by the systemd timer
 schema/          bundled default JSON Schemas (backlog items, done entries, agent notes, docs headers)
-templates/       pack for monitored projects: AGENTS.md, CLAUDE.md, config.json
+templates/       pack for monitored projects: instructions, config, CI workflow
 systemd/         worker units: sync timer/service, LAN-only static HTTP service
 config.example.json
                  reference hub instance config; local config.json is ignored

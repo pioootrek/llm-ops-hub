@@ -1,0 +1,44 @@
+# Copy to .github/workflows/backlog.yml in the monitored project.
+# CUSTOMIZE: replace <hub-ref> with a released tag or full commit SHA.
+# CUSTOMIZE: change pioootrek/llm-ops-hub if you use another hub repository.
+# CUSTOMIZE: change docs/backlog below if the project uses another backlog_dir.
+
+name: Backlog contract
+
+on:
+  pull_request:
+    paths:
+      - "docs/backlog/**"
+      # Add the configured docs_dir when the docs module is enabled, for example:
+      # - "docs/playbooks/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Check out pinned hub
+        uses: actions/checkout@v4
+        with:
+          repository: pioootrek/llm-ops-hub
+          ref: "<hub-ref>"
+          path: .llm-ops-hub
+          persist-credentials: false
+
+      - name: Install hub
+        run: |
+          python3 -m venv .llm-ops-hub/.venv
+          .llm-ops-hub/.venv/bin/python -m pip install -r .llm-ops-hub/requirements.txt
+
+      - name: Check backlog contract
+        run: |
+          .llm-ops-hub/.venv/bin/python .llm-ops-hub/bin/hub.py fmt --backlog-dir docs/backlog
+          git diff --exit-code
+          .llm-ops-hub/.venv/bin/python .llm-ops-hub/bin/hub.py validate --backlog-dir docs/backlog
