@@ -1,14 +1,14 @@
 # LLM Ops Hub
 
-A generic, read-only hub for **backlog-as-code**: the monitored project keeps
-its backlog as a Git-backed JSON pseudo-database, and this tool renders it as
-static HTML for humans and JSON for agents - from outside the project
-checkout, through a bare mirror, with no worktrees and no write path.
+A read-only hub for projects that keep their backlog in Git as JSON files. It
+reads the repository through a bare mirror and produces static HTML for humans
+and JSON for agents. It does not need a worktree and cannot write to the
+monitored repository.
 
-The hub is project-agnostic: project identity, repository location, backlog
-ref, and runtime paths all come from instance configuration.
+Project identity, repository location, backlog ref, and runtime paths come
+from the instance configuration.
 
-## The model in one minute
+## How it works
 
 - **Git is the database.** One backlog item = one canonical JSON file in the
   project repo (default `docs/backlog/<type>/<ID>.json`). Git history is the
@@ -24,12 +24,12 @@ ref, and runtime paths all come from instance configuration.
   assessment live in a JSON Schema (2020-12). The tool bundles a default
   (`schema/backlog-item.schema.json`); a project can override it by placing
   its own `schema.json` in the backlog directory. Project CI and this tool
-  consume the same file - no duplicated validators.
-- **Coordination-free ids.** `FEAT-20260703-salesforce-sync` = type prefix +
-  creation date + slug. No counters, no allocation ledger; in the unlikely
-  collision `validate` reports the duplicate and the fix is renaming a slug.
-- **LLM-first, human-friendly.** Agents read/write raw JSON and run two
-  commands; humans read the rendered HTML.
+  consume the same file, so there is no second validator to keep in sync.
+- **IDs need no counter.** `FEAT-20260703-salesforce-sync` = type prefix +
+  creation date + slug. There is no allocation ledger. If two IDs collide,
+  `validate` reports the duplicate and one slug must be renamed.
+- **Two interfaces.** Agents edit JSON and run two commands. Humans use the
+  rendered HTML.
 
 ## A backlog item
 
@@ -66,8 +66,8 @@ Types: `feature` (FEAT), `fix` (FIX), `rework` (RWK), `security` (SEC).
 Status: `open`, `in-progress`, `blocked`, or `archived` (kept for reference,
 not planned; hidden from the default backlog view). Prose is arrays of
 paragraphs (diff-friendly). `risk` is mandatory; `rollback` is required for
-`medium`/`high`. `notes` are append-only dated entries - the structured
-replacement for comments - with an optional `author` (`human:<name>` /
+`medium`/`high`. `notes` are append-only dated entries that replace comments.
+Each note may have an `author` (`human:<name>` /
 `agent:<name>`); human-authored notes render highlighted as direction for
 agents.
 
@@ -83,7 +83,7 @@ An open item may optionally carry a time-bounded risk decision:
 }
 ```
 
-The Hub derives `active`, `expiring`, or `expired` from `expires_on`, exposes
+The hub derives `active`, `expiring`, or `expired` from `expires_on`, exposes
 that state in the backlog view, and never treats the item as completed. The
 project repository remains the only place where the decision can be changed.
 
@@ -93,17 +93,16 @@ Completed work is the second record type: `done/DONE-YYYYMMDD-slug.json`,
 validated against `schema/done-entry.schema.json` (project-overridable via
 `done-schema.json`). Closing an item is one commit: delete the item file, add
 a done entry carrying `item_id` (and optionally the full `item_snapshot`),
-run `fmt` + `validate`. Because storage is one flat file per entry, there is
-never a giant done log to archive - grouping (by month, by area) happens in
-the rendered site, not on disk.
+run `fmt` + `validate`. Each completed item has its own file. The rendered
+site groups those files by month and area, so there is no growing log file to
+split or archive.
 
 ## Agent notes
 
-The third record type is memory for the agents themselves. When an agent
-runs an audit, finds a bug in passing, or reverse-engineers a gotcha, it
-persists the finding as a note so the knowledge survives context compaction
-and is shared across sessions and across different models. One note is one
-**directory**:
+Agent notes hold findings that should survive context compaction and remain
+available to later sessions or other models. Typical examples are audit
+results, bugs found while doing unrelated work, and hard-won implementation
+details. Each note is a directory:
 
 ```
 notes/NOTE-20260705-auth-audit/
@@ -112,26 +111,23 @@ notes/NOTE-20260705-auth-audit/
   login-bug.png
 ```
 
-The manifest pins the envelope (id == directory name, title, created,
-author, status `active|archived`, optional tags and inline body; extra
-fields allowed - bundled schema `schema/note.schema.json`, overridable via
-`note-schema.json`). Payload files are the agent's own format and are never
-rewritten by `fmt`; allowed types are text (`md txt json csv log`) and
-images (`png jpg jpeg gif webp`), max 5 MB each. `index.json` lists every
-note (id, title, tags, status, files), so agents discover relevant memory
-with a single cheap read instead of scanning every file. Notes serve the
-LLM, not the human: the hub renders them on `notes.html` (text inline,
-images inline, full-text search) where humans can browse and - via the
-feedback loop - archive or delete them, nothing more.
+The manifest defines the note metadata: id == directory name, title, created,
+author, status `active|archived`, plus optional tags and an inline body. Extra
+fields are allowed. The bundled schema is `schema/note.schema.json` and a
+project can override it with `note-schema.json`. Payload files use the agent's
+own format and are never rewritten by `fmt`; allowed types are text (`md txt json csv log`) and
+images (`png jpg jpeg gif webp`), max 5 MB each. `index.json` lists each note's
+id, title, tags, status, and files. Agents can check the index before opening
+individual notes. The hub also renders notes on `notes.html`, with inline
+text and images plus full-text search. Humans can request archival or deletion
+through the feedback flow.
 
 ## Docs pages (optional)
 
-The fourth record type covers the project's living documentation
-(playbooks, contracts, reference docs). Every top-level `*.md` page of a
-configured docs directory must open with a YAML frontmatter block - but the
-contract stays JSON: the block is only surface syntax for a flat,
-all-string dictionary validated against
-`schema/docs-header.schema.json` (project-overridable via
+The optional docs module covers playbooks, contracts, and reference pages.
+Every top-level `*.md` file in the configured docs directory starts with a
+YAML frontmatter block. The values are parsed as a flat string dictionary and
+validated against `schema/docs-header.schema.json` (project-overridable via
 `docs-header-schema.json` in the backlog dir). Instruction files
 (`AGENTS.md`, `CLAUDE.md`, `README.md`) and subdirectories are exempt.
 
@@ -144,8 +140,8 @@ status: "active"
 ---
 ```
 
-Hard rules: keys sorted, every value double-quoted (`fmt` canonicalizes the
-block and never touches the markdown body), `status` one of
+The header has sorted keys and double-quoted values. `fmt` canonicalizes the
+header without touching the Markdown body. `status` must be one of
 `active | reference | superseded | archived`, `audience` required,
 `last_reviewed` required for `active`/`reference`, `superseded_by` required
 non-empty for `superseded`. Extra string keys are allowed. `validate` and
@@ -163,17 +159,15 @@ about whether docs are part of the contract:
 | `docs_stale_days` | review-staleness threshold for the health report (`0` disables) | `60` |
 
 When enabled, the build renders a **Docs health** page (plus a dashboard
-card and a `docs` block in `data/index.json` for agents): status
-distribution, pages whose `last_reviewed` is past the threshold, pages
-missing from the index file, and dead relative links between docs. Those
-findings are report-only - a stale review or dead link never blocks a
-release; only broken headers do.
+card and a `docs` block in `data/index.json` for agents). It reports status
+counts, overdue reviews, pages missing from the index file, and dead relative
+links. Stale reviews and dead links do not block a release. Broken headers do.
 
 ## Human feedback
 
 The hub is read-only, but when `project.github_repo` is set, each rendered
-item carries three feedback buttons - **Add guidance**, **Change priority**,
-**Archive** - that open a prefilled GitHub issue (label `backlog-feedback`)
+item carries three feedback buttons: **Add guidance**, **Change priority**,
+and **Archive**. Each opens a prefilled GitHub issue (label `backlog-feedback`)
 with a machine-readable body. The human authenticates with their own GitHub
 login; the hub still needs no write token. Applying the issue is a normal
 backlog commit in the project repo, made by the next agent session (the
@@ -182,15 +176,14 @@ applied, open feedback issues are listed on the hub dashboard.
 
 ## Installation
 
-Three parts: wire up the monitored project, tell that project's AI agents
-how to use the backlog, and stand up the hub worker. The first two happen in
-the project repo; the third is one machine on your LAN.
+Setup has two locations. Add the backlog contract and agent instructions to
+the monitored repository, then run the hub worker on a machine in your LAN.
 
 ### 1. Wire up the monitored project
 
 On any machine that edits the backlog (developer laptops, agent runners),
 clone this repo once and install the single dependency into a local
-virtualenv - this keeps the tool's dependency out of the system Python on
+virtualenv. This keeps the tool's dependency out of the system Python on
 machines that juggle many projects (the dedicated LAN worker in section 3
 is the one place a system-wide install is acceptable):
 
@@ -214,25 +207,24 @@ $EDITOR docs/backlog/config.json     # set this project's areas enum
 git add docs/backlog && git commit -m "Adopt backlog-as-code"
 ```
 
-Optional - to put the project's living docs (playbooks, contracts,
+To put the project's living docs (playbooks, contracts,
 reference pages) under the same enforcement, add the docs-module keys to
 `docs/backlog/config.json` (`"docs_dir": "docs"`, optionally
-`docs_index_file` / `docs_stale_days` - see [Docs pages](#docs-pages-optional)),
+`docs_index_file` / `docs_stale_days`; see [Docs pages](#docs-pages-optional)),
 give every top-level page of that directory a frontmatter header, and re-run
 `fmt` + `validate`. The same two commands gate docs headers from then on,
 and the hub build renders the Docs health page.
 
 The copied `docs/backlog/AGENTS.md` is the operating guide agents load when
 working inside the backlog directory (record contract, lifecycle, query
-patterns); adjust its marked spots before committing. From then on the whole
-day-to-day workflow is: edit files under `docs/backlog/`, run `fmt`, run
-`validate` (must exit 0), commit to the backlog branch. `fmt` canonicalizes
-files and regenerates `index.json` - the generated fast-scan surface, never
-hand-edited.
+patterns); adjust its marked spots before committing. The regular workflow is
+short: edit files under `docs/backlog/`, run `fmt`, run `validate` and require
+exit code 0, then commit to the backlog branch. `fmt` canonicalizes files and
+regenerates `index.json`. Do not edit the index by hand.
 
 ### 2. Onboard the project's agents
 
-Agents will not look into `docs/backlog/` on their own - the project's root
+Agents will not look into `docs/backlog/` on their own. The project's root
 instruction file has to send them there. Paste the following into the
 project's root `AGENTS.md` (or `CLAUDE.md`, if that is the file your agents
 load), and fill in the two placeholders:
@@ -242,35 +234,35 @@ load), and fill in the two placeholders:
 
 This project keeps its backlog as code: one canonical JSON file per item
 under `docs/backlog/`, rendered elsewhere by a read-only hub. The operating
-guide is `docs/backlog/AGENTS.md` - read it before adding, updating, or
+guide is `docs/backlog/AGENTS.md`. Read it before adding, updating, or
 closing backlog items. The short version:
 
 - Backlog changes are ordinary commits to `<backlog-branch>`; there is no
   other write path. Never edit `docs/backlog/index.json` by hand.
 - After ANY edit under `docs/backlog/`, run
   `<path-to-hub>/.venv/bin/python <path-to-hub>/bin/hub.py fmt --backlog-dir docs/backlog`,
-  then the same command with `validate` - it must exit 0 before you commit.
+  then the same command with `validate`. It must exit 0 before you commit.
 - Pick up work from items with `status: open`, highest priority first
   (`now` > `next` > `later`); read the full item before starting, and treat
   human-authored notes (`"author": "human:..."`) as direction.
 - When you finish work, close the loop in one commit: delete the item file
   and add a `done/` entry (see the guide).
 - Durable findings (audit results, bugs spotted in passing, gotchas) belong
-  in `docs/backlog/notes/` as agent notes - shared memory across sessions
+  in `docs/backlog/notes/` as agent notes, shared across sessions
   and models. One note = one directory (`note.json` manifest + any files:
   markdown, JSON, screenshots). Check `index.json` for relevant notes before
   starting non-trivial work; persist what matters before compacting.
 - Open GitHub issues labeled `backlog-feedback` are human instructions for
-  the backlog - apply them as described in the guide, then close them.
+  the backlog. Apply them as described in the guide, then close them.
 - (Only if the docs module is enabled) editing any top-level page of the
   configured docs directory counts as a backlog-contract edit too: the page
   must keep its YAML frontmatter header, and the same fmt+validate commands
   must exit 0 before you commit.
 ```
 
-Reword freely; the load-bearing parts are the pointer to
+Reword freely. Keep the pointer to
 `docs/backlog/AGENTS.md`, the fmt+validate rule, the agent-notes bullet
-(without it agents never use their shared memory), and the
+(otherwise agents will miss their shared memory), and the
 `backlog-feedback` bullet (drop that one if the project is not on GitHub).
 If the project follows the `AGENTS.md`-plus-`CLAUDE.md`-include convention,
 the snippet goes into `AGENTS.md` only. When several repositories on one
@@ -310,7 +302,7 @@ For unattended operation, adjust the paths/user inside the `systemd/` units
 and install them: the timer runs sync+build every 2 minutes, the HTTP service
 serves the site LAN-only.
 
-If `project.github_repo` is set (enables the feedback loop), additionally:
+If `project.github_repo` is set, enable the feedback loop:
 
 ```bash
 gh auth login    # a token with read scope is enough
@@ -318,11 +310,11 @@ gh label create backlog-feedback --repo <owner/repo> \
   --description "Backlog feedback filed from the hub"
 ```
 
-The label must exist up front - GitHub silently drops unknown labels from
+The label must exist up front. GitHub silently drops unknown labels from
 prefilled issue links.
 
 `build` validates everything first and **refuses to render an invalid
-backlog** - the previous release stays live. Output: `index.html` (dashboard,
+backlog**. The previous release stays live. Output: `index.html` (dashboard,
 including open feedback issues), `backlog.html` (table + item cards),
 `notes.html` (agent notes: browse/search, archive/delete via feedback
 issues), `done.html` (completed work grouped by month), and
@@ -371,18 +363,18 @@ applies to this repo and to the template pack shipped to projects.
 
 - The systemd timer runs `bin/sync_hub.sh` every 2 minutes; the HTTP service
   serves `public/` LAN-only. Generated sites can include security-sensitive
-  backlog items - keep them LAN-only.
+  backlog items. Keep them LAN-only.
 - `gh` (read scope) is needed only when `project.github_repo` is set.
 - Releases are immutable directories under `public_releases/`; `public` is a
   symlink flipped atomically after a successful build. `build` skips rendering
-  when nothing changed since the last successful build (same commit, feedback
-  issues, tool, and config — use `build --force` to override) and prunes old
-  release directories down to `build.releases_keep`.
-- One deliberate exception to release immutability: `public/heartbeat.json`
-  is rewritten on every successful build attempt, skips included. The
-  rendered pages' staleness banner alarms when the heartbeat is old
-  (pipeline down or failing), never when the content is merely old — a
-  quiet backlog is not a failure.
+  when nothing changed since the last successful build. It compares the commit,
+  feedback issues, tool, and config. Use `build --force` to override the check.
+  Old release directories are pruned down to `build.releases_keep`.
+- `public/heartbeat.json` is the one mutable file in a release. It is
+  rewritten on every successful build attempt, including skipped builds. The
+  rendered pages show a staleness warning when the heartbeat is old, which
+  means the pipeline is down or failing. Old content alone does not trigger
+  the warning because a quiet backlog is not a failure.
 
 ## Status
 
