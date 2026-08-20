@@ -200,6 +200,12 @@ backlog commit in the project repo, made by the next agent session (the
 workflow is in `templates/AGENTS.md`) or by project-side automation. Until
 applied, open feedback issues are listed on the hub dashboard.
 
+Without `project.github_repo`, item and note cards show the same payload in a
+read-only text field. The copy button uses the Clipboard API when the browser
+allows it. On LAN HTTP or after a clipboard error, the field stays visible and
+its text is selected for manual copying. Paste the payload into the project's
+tracker or a commit message. The hub still does not accept writes.
+
 ## Installation
 
 Setup has two locations. Add the backlog contract and agent instructions to

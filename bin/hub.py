@@ -1205,6 +1205,36 @@ STALE_SCRIPT = """
 </script>
 """
 
+FEEDBACK_COPY_SCRIPT = """
+<script>
+(function () {
+  document.addEventListener("click", async (event) => {
+    const choice = event.target.closest("[data-feedback-choice]");
+    if (choice) {
+      const box = choice.closest(".feedback-fallback");
+      box.querySelector("textarea").value = choice.dataset.feedbackPayload;
+      box.querySelector("[data-feedback-status]").textContent = "Payload ready to copy.";
+      return;
+    }
+    const copy = event.target.closest("[data-copy-feedback]");
+    if (!copy) return;
+    const box = copy.closest(".feedback-fallback");
+    const field = box.querySelector("textarea");
+    const status = box.querySelector("[data-feedback-status]");
+    try {
+      if (!navigator.clipboard || !window.isSecureContext) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(field.value);
+      status.textContent = "Copied.";
+    } catch (error) {
+      field.focus();
+      field.select();
+      status.textContent = "Clipboard unavailable. Copy the selected text.";
+    }
+  });
+})();
+</script>
+"""
+
 
 def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "", with_docs: bool = False) -> str:
     links = [
@@ -1236,7 +1266,7 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
 <main>
 <div id="stale-banner" class="warn" data-generated-at="{h(generated_at)}" data-stale-after="{STALE_AFTER_MINUTES}" hidden></div>
 {body}</main>
-{STALE_SCRIPT}</body>
+{STALE_SCRIPT}{FEEDBACK_COPY_SCRIPT}</body>
 </html>
 """
 
@@ -1311,6 +1341,7 @@ CSS = (
     '.item-detail{scroll-margin-top:92px}.item-detail h3{border-top:1px solid var(--border);padding-top:12px}'
     '.note-human{border-left:3px solid var(--ring);padding-left:9px;font-size:13px}'
     '.item-actions{display:flex;gap:6px;flex-wrap:wrap}'
+    '.feedback-fallback textarea{width:100%;min-height:88px;margin-top:8px;padding:8px;font:12px/1.4 ui-monospace,monospace}'
     '.note-image{max-width:100%;border:1px solid var(--border);border-radius:6px}'
     '.js .item-detail{display:none}.js .item-detail.active{display:block}'
     'table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:transparent}'
@@ -1348,6 +1379,10 @@ RISK_ACCEPTANCE_EXPIRING_DAYS = 14
 FEEDBACK_LABEL = "backlog-feedback"
 
 
+def feedback_payload(item_id: str, action: str, payload_hint: str) -> str:
+    return f"item: {item_id}\naction: {action}\npayload: {payload_hint}\n"
+
+
 def feedback_issue_url(github_repo: str, item_id: str, action: str, payload_hint: str) -> str:
     """Prefilled GitHub issue link - the hub's only 'write' surface, which is
     none at all: the human authenticates as themselves, and the change is
@@ -1355,9 +1390,23 @@ def feedback_issue_url(github_repo: str, item_id: str, action: str, payload_hint
     query = urllib.parse.urlencode({
         "labels": FEEDBACK_LABEL,
         "title": f"[{FEEDBACK_LABEL}] {item_id}: {action}",
-        "body": f"item: {item_id}\naction: {action}\npayload: {payload_hint}\n",
+        "body": feedback_payload(item_id, action, payload_hint),
     })
     return f"https://github.com/{github_repo}/issues/new?{query}"
+
+
+def feedback_fallback(item_id: str, actions: list[tuple[str, str, str]]) -> str:
+    first_action, _, first_hint = actions[0]
+    choices = "".join(
+        f'<button class=button type=button data-feedback-choice data-feedback-payload="{h(feedback_payload(item_id, action, hint))}">{h(label)}</button>'
+        for action, label, hint in actions
+    )
+    return (
+        '<div class=feedback-fallback><p class=item-actions>' + choices
+        + '<button class="button primary" type=button data-copy-feedback>Copy payload</button></p>'
+        + f'<textarea readonly>{h(feedback_payload(item_id, first_action, first_hint))}</textarea>'
+        + '<p class=muted data-feedback-status>Paste this payload into the project tracker or a commit message.</p></div>'
+    )
 
 
 def risk_acceptance_state(item: dict[str, Any], today: dt.date) -> str:
@@ -1459,15 +1508,18 @@ def item_detail(
         if acceptance_state != "none":
             meta_pills.append(risk_acceptance_pill(acceptance_state))
     meta = " ".join(meta_pills)
+    feedback_actions = [
+        ("guidance", "Add guidance", "<write your guidance for the agent here>"),
+        ("set-priority", "Change priority", "now | next | later (keep exactly one)"),
+        ("archive", "Archive", "<optional reason>"),
+    ]
     if github_repo:
         body += "<h3>feedback</h3><p class=item-actions>" + "".join(
             f'<a class=button href="{h(feedback_issue_url(github_repo, item["id"], action, hint))}">{h(label)}</a>'
-            for action, label, hint in [
-                ("guidance", "Add guidance", "<write your guidance for the agent here>"),
-                ("set-priority", "Change priority", "now | next | later (keep exactly one)"),
-                ("archive", "Archive", "<optional reason>"),
-            ]
+            for action, label, hint in feedback_actions
         ) + "</p><p class=muted>Opens a prefilled GitHub issue; the change lands as a commit in the project repo.</p>"
+    else:
+        body += "<h3>feedback</h3>" + feedback_fallback(item["id"], feedback_actions)
     active_class = " active" if active else ""
     return (
         f'<article id="{h(item["id"])}" class="card item-detail{active_class}" data-item-id="{h(item["id"])}">'
@@ -1546,14 +1598,17 @@ def note_detail(note: dict[str, Any], *, payloads: dict[str, bytes], github_repo
         content += f"<h3>{h(rel_file)}</h3><pre>{h(text[:NOTE_RENDER_TEXT_LIMIT])}</pre>"
         if len(text) > NOTE_RENDER_TEXT_LIMIT:
             content += f'<p class=muted>truncated — <a href="{h(file_rel)}">full file</a></p>'
+    note_actions = [
+        ("archive-note", "Archive", "<optional reason>"),
+        ("delete-note", "Delete", "<optional reason>"),
+    ]
     if github_repo:
         content += "<h3>manage</h3><p class=item-actions>" + "".join(
             f'<a class=button href="{h(feedback_issue_url(github_repo, note["id"], action, hint))}">{h(label)}</a>'
-            for action, label, hint in [
-                ("archive-note", "Archive", "<optional reason>"),
-                ("delete-note", "Delete", "<optional reason>"),
-            ]
+            for action, label, hint in note_actions
         ) + "</p>"
+    else:
+        content += "<h3>manage</h3>" + feedback_fallback(note["id"], note_actions)
     meta = "".join(
         f"<span class=pill>{h(value)}</span>"
         for value in [
@@ -2841,6 +2896,24 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "the issue body is a producer/consumer contract - agents parse it per "
         "templates/AGENTS.md, so change both together"
     )
+    assert feedback_payload("FEAT-20260703-sample-item", "set-priority", "now") == query["body"][0]
+    fallback_html = feedback_fallback(
+        'FEAT-20260703-sample-"item',
+        [("guidance", "Add guidance", "<write here>")],
+    )
+    assert "data-copy-feedback" in fallback_html and "<textarea readonly>" in fallback_html
+    assert "&quot;item" in fallback_html and "&lt;write here&gt;" in fallback_html
+    assert 'sample-"item' not in fallback_html and "<write here>" not in fallback_html
+    no_github_item_html = item_detail(items[0])
+    assert "Copy payload" in no_github_item_html and "data-feedback-choice" in no_github_item_html
+    no_github_note_html = note_detail(parsed_notes[0], payloads={
+        f"{note_dir}/findings.md": b"# Findings",
+        f"{note_dir}/shot.png": b"image",
+    })
+    assert "Copy payload" in no_github_note_html
+    shell_html = page("Project", "Backlog", no_github_item_html, active="backlog")
+    assert "navigator.clipboard.writeText" in shell_html
+    assert "Clipboard unavailable. Copy the selected text." in shell_html
 
     state_key = parse_json("state-key", build_state_key({"name": "x"}, "abc123", {"issues": [], "issue_error": None}))
     assert set(state_key["schemas"]) == {

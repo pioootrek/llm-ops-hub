@@ -12,6 +12,8 @@ Progress (2026-08-20): phase 1 is implemented: repository CI,
 template. Items 3.1 and 3.2 are documented.
 Items 2.1 and 2.2 are implemented as one Health report.
 Item 2.3 is implemented: item cards and JSON expose exact note references.
+Item 2.4 is implemented: projects without GitHub get selectable feedback
+payloads.
 
 ## The rule: mega simple, mega functional
 
