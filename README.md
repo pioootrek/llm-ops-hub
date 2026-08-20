@@ -117,8 +117,9 @@ notes/NOTE-20260705-auth-audit/
 ```
 
 The manifest defines the note metadata: id == directory name, title, created,
-author, status `active|archived`, plus optional tags and an inline body. Extra
-fields are allowed. The bundled schema is `schema/note.schema.json` and a
+author, status `active|archived`, plus optional `last_reviewed`, tags, and an
+inline body. Extra fields are allowed. The bundled schema is
+`schema/note.schema.json` and a
 project can override it with `note-schema.json`. Payload files use the agent's
 own format and are never rewritten by `fmt`; allowed types are text (`md txt json csv log`) and
 images (`png jpg jpeg gif webp`), max 5 MB each. `index.json` lists each note's
@@ -126,6 +127,9 @@ id, title, tags, status, and files. Agents can check the index before opening
 individual notes. The hub also renders notes on `notes.html`, with inline
 text and images plus full-text search. Humans can request archival or deletion
 through the feedback flow.
+
+`last_reviewed` is an optional `YYYY-MM-DD` date. Set it when an active note's
+facts have been checked again, and update it whenever those facts change.
 
 ## Docs pages (optional)
 
@@ -162,6 +166,18 @@ about whether docs are part of the contract:
 | `docs_dir` | repo-root-relative docs directory; non-empty enables the module | unset (disabled) |
 | `docs_index_file` | discovery index page checked for a link to every other page | unset (check skipped) |
 | `docs_stale_days` | review-staleness threshold for the health report (`0` disables) | `60` |
+
+Backlog and note health use two more project settings:
+
+| Project config key | Meaning | Default |
+| --- | --- | --- |
+| `health_stale_days` | inactivity threshold for `in-progress`, `blocked`, and `priority: now` items (`0` disables age findings) | `45` |
+| `notes_stale_days` | review threshold for active agent notes (`0` disables) | `90` |
+
+The build writes `health.html`, adds a Health card to the dashboard, and puts
+the same findings in the `health` block of `data/index.json`. Backlog findings
+include items with no notes even when age checks are disabled. Health findings
+do not block a release.
 
 When enabled, the build renders a **Docs health** page (plus a dashboard
 card and a `docs` block in `data/index.json` for agents). It reports status
@@ -307,8 +323,8 @@ Stable rule identifiers in schema version 1 are `schema`, `json.invalid`,
 `item.area`, `done.id_date`, `note.layout`, `note.file_type`,
 `note.file_size`, `note.manifest_missing`, `note.id_directory`,
 `note.id_date`, `docs.empty`, `docs.frontmatter.invalid`,
-`docs.frontmatter.canonical`, `docs.last_reviewed`, `index.missing`,
-`index.stale`, and `configuration`.
+`note.last_reviewed`, `docs.frontmatter.canonical`, `docs.last_reviewed`,
+`index.missing`, `index.stale`, and `configuration`.
 
 ### 3. Stand up the hub worker
 
@@ -343,9 +359,10 @@ prefilled issue links.
 backlog**. The previous release stays live. Output: `index.html` (dashboard,
 including open feedback issues), `backlog.html` (table + item cards),
 `notes.html` (agent notes: browse/search, archive/delete via feedback
-issues), `done.html` (completed work grouped by month), and
+issues), `done.html` (completed work grouped by month), `health.html`
+(report-only backlog and note findings), and
 `data/index.json` for agents (keys: `backlog` with the full items,
-`done`, `notes`, `feedback_issues`, `feedback_error`, `ref`, `commit`,
+`done`, `notes`, `health`, `feedback_issues`, `feedback_error`, `ref`, `commit`,
 `generated_at`).
 
 ## Configuration

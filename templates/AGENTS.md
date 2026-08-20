@@ -155,8 +155,10 @@ notes/NOTE-20260705-auth-audit/
   directory name), `title` (make it scannable - it is how others decide
   whether to open the note), `created` (must match the id date), `author`
   (`agent:<model-or-session>`), `status` (`active|archived`), optional
-  `tags`, optional inline `body` (any JSON - enough for a quick one-file
-  note). Extra top-level fields are allowed.
+  `last_reviewed` (`YYYY-MM-DD`), optional `tags`, optional inline `body`
+  (any JSON - enough for a quick one-file note). Extra top-level fields are
+  allowed. Set `last_reviewed` after checking an active note's facts again.
+  Updating factual content must also update `last_reviewed`.
 - Payload files are free-form and never rewritten by `fmt` - markdown is
   usually the best choice for prose (greppable, diffable). Allowed types:
   `.md .txt .json .csv .log .png .jpg .jpeg .gif .webp`, max 5 MB each.

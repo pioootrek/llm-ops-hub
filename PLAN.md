@@ -10,6 +10,7 @@ items already proposed or implemented from it are referenced, not repeated.
 Progress (2026-08-20): phase 1 is implemented: repository CI,
 `validate --json`, HTML escaping self-tests, and a monitored-project CI
 template. Items 3.1 and 3.2 are documented.
+Items 2.1 and 2.2 are implemented as one Health report.
 
 ## The rule: mega simple, mega functional
 

@@ -3,5 +3,7 @@
     "example-area-one",
     "example-area-two"
   ],
+  "health_stale_days": 45,
+  "notes_stale_days": 90,
   "schema_version": 1
 }

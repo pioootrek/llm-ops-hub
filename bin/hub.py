@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,8 @@ PROJECT_DOCS_SCHEMA_FILE = "docs-header-schema.json"
 PROJECT_CONFIG_FILE = "config.json"
 DOCS_EXCLUDE = {"AGENTS.md", "CLAUDE.md", "README.md"}
 DOCS_STALE_DAYS_DEFAULT = 60
+HEALTH_STALE_DAYS_DEFAULT = 45
+NOTES_STALE_DAYS_DEFAULT = 90
 DONE_SUBDIR = "done"
 NOTES_SUBDIR = "notes"
 NOTE_MANIFEST = "note.json"
@@ -391,6 +394,19 @@ def docs_settings(project_cfg: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def health_settings(project_cfg: dict[str, Any]) -> dict[str, int]:
+    values = {}
+    for key, default in [
+        ("health_stale_days", HEALTH_STALE_DAYS_DEFAULT),
+        ("notes_stale_days", NOTES_STALE_DAYS_DEFAULT),
+    ]:
+        try:
+            values[key] = max(0, int(project_cfg.get(key, default)))
+        except (TypeError, ValueError) as exc:
+            raise ContractError(f"project config: {key} must be an integer: {exc}") from exc
+    return values
+
+
 def is_hidden(rel_path: str) -> bool:
     """Dotfiles (.gitkeep, .DS_Store, hidden dirs) are never records and are
     ignored uniformly here, so the worktree and the mirror cannot disagree
@@ -575,6 +591,11 @@ def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]]
             errors.append(Diagnostic(label, "note.id_directory", f"id {note_id} must match the directory name {note_dir}"))
         if note_id[5:13] != data["created"].replace("-", ""):
             errors.append(Diagnostic(label, "note.id_date", f"id date part must match created {data['created']}"))
+        if "last_reviewed" in data:
+            try:
+                dt.date.fromisoformat(data["last_reviewed"])
+            except (TypeError, ValueError):
+                errors.append(Diagnostic(label, "note.last_reviewed", f"last_reviewed is not a real calendar date: {data['last_reviewed']!r}"))
         if raw != canonical_json(data):
             errors.append(Diagnostic(label, "canonical.form", "not in canonical form (run: hub.py fmt)"))
 
@@ -717,6 +738,64 @@ def docs_health(
     }
 
 
+def project_health(
+    items: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+    settings: dict[str, int],
+    today: dt.date,
+) -> dict[str, Any]:
+    item_findings = []
+    for item in items:
+        if item["status"] == "archived":
+            continue
+        item_notes = item.get("notes", [])
+        last_activity = max([item["created"]] + [note["date"] for note in item_notes])
+        age_days = (today - dt.date.fromisoformat(last_activity)).days
+        rules = []
+        if not item_notes:
+            rules.append("zero_notes")
+        if item["status"] == "blocked" and not item_notes:
+            rules.append("blocked_without_notes")
+        threshold = settings["health_stale_days"]
+        if threshold > 0 and age_days > threshold:
+            if item["status"] == "in-progress":
+                rules.append("stale_in_progress")
+            if item["status"] == "blocked":
+                rules.append("stale_blocked")
+            if item["priority"] == "now":
+                rules.append("stale_now")
+        if rules:
+            item_findings.append({
+                "age_days": age_days,
+                "id": item["id"],
+                "last_activity": last_activity,
+                "rules": rules,
+                "title": item["title"],
+            })
+
+    note_findings = []
+    note_threshold = settings["notes_stale_days"]
+    if note_threshold > 0:
+        for note in notes:
+            if note["status"] != "active":
+                continue
+            freshness = max(note["created"], note.get("last_reviewed", note["created"]))
+            age_days = (today - dt.date.fromisoformat(freshness)).days
+            if age_days > note_threshold:
+                note_findings.append({
+                    "age_days": age_days,
+                    "id": note["id"],
+                    "freshness": freshness,
+                    "title": note["title"],
+                })
+    return {
+        "item_findings": item_findings,
+        "notes_stale_days": note_threshold,
+        "note_findings": note_findings,
+        "stale_days": settings["health_stale_days"],
+    }
+
+
 def build_index(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated_by": "hub.py fmt",
@@ -800,6 +879,7 @@ def cmd_fmt(args: argparse.Namespace) -> int:
 
     schema = load_schema(source)
     project_cfg = load_project_config(source)
+    health_settings(project_cfg)
     settings = docs_settings(project_cfg)
     docs_source = _docs_worktree(source, settings) if settings else None
     if docs_source is not None:
@@ -845,6 +925,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     source = _worktree(args.backlog_dir)
     schema = load_schema(source)
     project_cfg = load_project_config(source)
+    health_settings(project_cfg)
     items, errors = validate_items(source, schema, project_cfg)
     done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
@@ -982,6 +1063,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
     schema = load_schema(source)
     project_cfg = load_project_config(source)
+    health_settings(project_cfg)
     items, errors = validate_items(source, schema, project_cfg)
     done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
@@ -1103,6 +1185,7 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
         ("backlog", "backlog.html", "Backlog"),
         ("notes", "notes.html", "Notes"),
         ("done", "done.html", "Done"),
+        ("health", "health.html", "Health"),
         *([("docs", "docs.html", "Docs")] if with_docs else []),
         ("data", "data/index.json", "JSON"),
     ]
@@ -1233,7 +1316,6 @@ CSS = (
 )
 
 
-STALE_AFTER_DAYS = 45
 RISK_ACCEPTANCE_EXPIRING_DAYS = 14
 
 FEEDBACK_LABEL = "backlog-feedback"
@@ -1283,6 +1365,7 @@ def item_detail(
     active: bool = False,
     github_repo: str | None = None,
     today: dt.date | None = None,
+    stale_days: int = HEALTH_STALE_DAYS_DEFAULT,
 ) -> str:
     body = paragraphs(item["problem"])
     for section in ["value", "scope", "validation", "trigger"]:
@@ -1333,11 +1416,11 @@ def item_detail(
         if age >= 0:
             created_label = f"{item['created']} ({age}d)"
         last_activity = max([item["created"]] + [n["date"] for n in item.get("notes", [])])
-        stale = (today - dt.date.fromisoformat(last_activity)).days > STALE_AFTER_DAYS
+        stale = stale_days > 0 and (today - dt.date.fromisoformat(last_activity)).days > stale_days
     meta_pills = [f"<span class=pill>{h(item[key])}</span>" for key in ["type", "area", "priority", "status"]]
     meta_pills.append(f"<span class=pill>{h(created_label)}</span>")
     if stale:
-        meta_pills.append('<span class="pill stale" title="no note or edit in over 45 days">stale</span>')
+        meta_pills.append(f'<span class="pill stale" title="no activity in over {stale_days} days">stale</span>')
     if today is not None:
         acceptance_state = risk_acceptance_state(item, today)
         if acceptance_state != "none":
@@ -1400,7 +1483,10 @@ def backlog_row(item: dict[str, Any], idx: int, today: dt.date) -> str:
     )
 
 
-NOTE_ENVELOPE_KEYS = {"schema_version", "id", "title", "created", "author", "status", "tags", "body", "_path", "_files"}
+NOTE_ENVELOPE_KEYS = {
+    "schema_version", "id", "title", "created", "last_reviewed", "author",
+    "status", "tags", "body", "_path", "_files",
+}
 NOTE_RENDER_TEXT_LIMIT = 20000
 
 
@@ -1437,11 +1523,17 @@ def note_detail(note: dict[str, Any], *, payloads: dict[str, bytes], github_repo
         ) + "</p>"
     meta = "".join(
         f"<span class=pill>{h(value)}</span>"
-        for value in [note["created"], note["author"], note["status"], *note.get("tags", [])]
+        for value in [
+            note["created"],
+            *([f"reviewed {note['last_reviewed']}"] if note.get("last_reviewed") else []),
+            note["author"],
+            note["status"],
+            *note.get("tags", []),
+        ]
     )
     search = " ".join(search_parts).lower()
     return (
-        f'<article class="card note-entry" data-status="{h(note["status"])}" data-note-search="{h(search)}">'
+        f'<article id="{h(note["id"])}" class="card note-entry" data-status="{h(note["status"])}" data-note-search="{h(search)}">'
         f"<h2>{h(note['id'])} · {h(note['title'])}</h2><div class=\"meta\">{meta}</div>{content}</article>"
     )
 
@@ -1486,6 +1578,53 @@ def done_detail(entry: dict[str, Any]) -> str:
 def docs_status_pill(status: str) -> str:
     tone = {"active": "risk-low", "reference": "", "superseded": "risk-medium", "archived": ""}.get(status, "")
     return f'<span class="pill {tone}">{h(status)}</span>'
+
+
+def project_health_body(
+    health: dict[str, Any],
+    project: dict[str, Any],
+    commit: str,
+    docs_summary: dict[str, Any] | None = None,
+) -> str:
+    rule_labels = {
+        "zero_notes": "no notes",
+        "blocked_without_notes": "blocked without notes",
+        "stale_in_progress": "stale in progress",
+        "stale_blocked": "stale blocked",
+        "stale_now": "stale now",
+    }
+    def finding_pills(finding: dict[str, Any]) -> str:
+        return "".join(f'<span class="pill stale">{h(rule_labels[rule])}</span>' for rule in finding["rules"])
+
+    item_rows = "".join(
+        f'<tr><td><a href="backlog.html#{h(finding["id"])}"><strong>{h(finding["id"])}</strong></a>'
+        f'<div class=muted>{h(finding["title"])}</div></td>'
+        f'<td>{h(finding["last_activity"])} ({finding["age_days"]}d)</td>'
+        f'<td>{finding_pills(finding)}</td></tr>'
+        for finding in health["item_findings"]
+    ) or '<tr><td colspan=3 class=muted>No backlog findings.</td></tr>'
+    note_rows = "".join(
+        f'<tr><td><a href="notes.html#{h(finding["id"])}"><strong>{h(finding["id"])}</strong></a>'
+        f'<div class=muted>{h(finding["title"])}</div></td>'
+        f'<td>{h(finding["freshness"])} ({finding["age_days"]}d)</td></tr>'
+        for finding in health["note_findings"]
+    ) or '<tr><td colspan=2 class=muted>No stale active notes.</td></tr>'
+    docs_card = ""
+    if docs_summary is not None:
+        count = len(docs_summary["overdue"]) + len(docs_summary["missing_from_index"]) + docs_summary["dead_link_count"]
+        docs_card = card("Docs", f"<p>{count} finding(s).</p><p><a href=docs.html>Open docs details →</a></p>")
+    return (
+        '<div class=page-heading><div><h1>Health</h1>'
+        f'<p class=muted>Report-only findings at <code>{h(project["backlog_ref"])}</code> @ <code>{h(commit[:10])}</code>.</p></div></div>'
+        '<section class=grid>'
+        + card("Backlog", f'<p>{len(health["item_findings"])} item(s) with findings.</p><p>Age threshold: {health["stale_days"]} days.</p>')
+        + card("Notes", f'<p>{len(health["note_findings"])} active note(s) need review.</p><p>Review threshold: {health["notes_stale_days"]} days.</p>')
+        + docs_card
+        + '</section><h2>Backlog findings</h2><div class=backlog-list><table><thead><tr><th>Item</th><th>Last activity</th><th>Findings</th></tr></thead><tbody>'
+        + item_rows
+        + '</tbody></table></div><h2>Notes to review</h2><div class=backlog-list><table><thead><tr><th>Note</th><th>Freshness date</th></tr></thead><tbody>'
+        + note_rows + '</tbody></table></div>'
+    )
 
 
 def docs_health_body(
@@ -1594,7 +1733,9 @@ def render_site(
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     css_version = "?v=" + generated_at.replace("-", "").replace(":", "").replace("+", "")
     today = dt.date.fromisoformat(generated_at[:10])
-    health = docs_health(docs, docs_source, docs_cfg, today) if with_docs else None
+    docs_report = docs_health(docs, docs_source, docs_cfg, today) if with_docs else None
+    health_cfg = health_settings(load_project_config(source))
+    health = project_health(items, notes, health_cfg, today)
     index_data = {
         "backlog": items,
         "commit": commit,
@@ -1602,6 +1743,7 @@ def render_site(
         "feedback_error": issue_error,
         "feedback_issues": issues,
         "generated_at": generated_at,
+        "health": health,
         "notes": notes,
         "ref": project["backlog_ref"],
         "schema_version": 1,
@@ -1609,7 +1751,7 @@ def render_site(
     if with_docs:
         index_data["docs"] = {
             "dir": docs_cfg["dir"],
-            "health": health,
+            "health": docs_report,
             "pages": [
                 {
                     "dead_links": doc["dead_links"],
@@ -1663,20 +1805,25 @@ def render_site(
             + (f" (latest: {h(notes[0]['created'])})" if notes else "")
             + ".</p><p><a href=notes.html>Browse notes →</a></p>"
         )),
+        card("Health", (
+            f'<p>{len(health["item_findings"])} backlog finding(s), '
+            f'{len(health["note_findings"])} note(s) to review.</p>'
+            '<p><a href=health.html>Open health report →</a></p>'
+        )),
         card("Baseline", f"<p><code>{h(project['backlog_ref'])}</code> @ <code>{h(commit[:10])}</code></p><p class=muted>generated {h(generated_at)}</p>"),
     ]
     if with_docs:
         finding_pills = "".join(
             f'<span class="pill stale">{count} {h(label)}</span>'
             for count, label in [
-                (len(health["overdue"]), "overdue review(s)"),
-                (len(health["missing_from_index"]), "not in index"),
-                (health["dead_link_count"], "dead link(s)"),
+                (len(docs_report["overdue"]), "overdue review(s)"),
+                (len(docs_report["missing_from_index"]), "not in index"),
+                (docs_report["dead_link_count"], "dead link(s)"),
             ]
             if count
         )
         docs_summary = (
-            f"<p>{len(docs)} pages in <code>{h(docs_cfg['dir'])}</code>.</p><p>{pills(health['by_status'])}</p>"
+            f"<p>{len(docs)} pages in <code>{h(docs_cfg['dir'])}</code>.</p><p>{pills(docs_report['by_status'])}</p>"
             + (f"<p>{finding_pills}</p>" if finding_pills else "<p class=muted>No findings.</p>")
             + "<p><a href=docs.html>Open docs health →</a></p>"
         )
@@ -1717,7 +1864,7 @@ def render_site(
 
     rows = [backlog_row(item, idx, today) for idx, item in enumerate(items)]
     detail_cards = "".join(
-        item_detail(item, active=idx == 0, github_repo=project["github_repo"], today=today)
+        item_detail(item, active=idx == 0, github_repo=project["github_repo"], today=today, stale_days=health_cfg["health_stale_days"])
         for idx, item in enumerate(items)
     )
     detail_pane = (
@@ -2081,12 +2228,25 @@ document.documentElement.classList.add("js");
         encoding="utf-8",
     )
 
+    (out / "health.html").write_text(
+        page(
+            name,
+            "Health",
+            project_health_body(health, project, commit, docs_report),
+            active="health",
+            generated_at=generated_at,
+            css_version=css_version,
+            with_docs=with_docs,
+        ),
+        encoding="utf-8",
+    )
+
     if with_docs:
         (out / "docs.html").write_text(
             page(
                 name,
                 "Docs health",
-                docs_health_body(docs, health, docs_cfg, project, commit),
+                docs_health_body(docs, docs_report, docs_cfg, project, commit),
                 active="docs",
                 generated_at=generated_at,
                 css_version=css_version,
@@ -2330,6 +2490,87 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert not errs, f"valid note dir reported errors: {errs}"
     assert parsed_notes[0]["id"] == "NOTE-20260703-sample-finding"
     assert parsed_notes[0]["_files"] == ["findings.md", "shot.png"], f"payload listing wrong: {parsed_notes[0]['_files']}"
+
+    reviewed_note = json.loads(good_note)
+    reviewed_note["last_reviewed"] = "2026-07-10"
+    reviewed_notes, errs = validate_notes(
+        _MemorySource({f"{note_dir}/note.json": canonical_json(reviewed_note)}), note_schema
+    )
+    assert not errs, f"reviewed note reported errors: {errs}"
+    reviewed_note_html = note_detail(reviewed_notes[0], payloads={})
+    assert f'id="{reviewed_note["id"]}"' in reviewed_note_html
+    assert "reviewed 2026-07-10" in reviewed_note_html
+    bad_reviewed_note = dict(reviewed_note, last_reviewed="2026-02-30")
+    _, errs = validate_notes(
+        _MemorySource({f"{note_dir}/note.json": canonical_json(bad_reviewed_note)}), note_schema
+    )
+    assert any(error.rule == "note.last_reviewed" for error in errs), "invalid note review date not reported"
+
+    health_items = [json.loads(good)]
+    health_items[0]["_path"] = "feature/FEAT-20260703-sample-item.json"
+    health_items[0]["status"] = "in-progress"
+    health_items[0]["priority"] = "now"
+    health_items[0]["notes"] = []
+    project_report = project_health(
+        health_items,
+        reviewed_notes,
+        {"health_stale_days": 5, "notes_stale_days": 5},
+        dt.date(2026, 7, 20),
+    )
+    assert project_report["item_findings"][0]["rules"] == ["zero_notes", "stale_in_progress", "stale_now"]
+    assert project_report["note_findings"] == [
+        {
+            "age_days": 10,
+            "id": reviewed_note["id"],
+            "freshness": "2026-07-10",
+            "title": reviewed_note["title"],
+        }
+    ]
+    disabled_report = project_health(
+        health_items,
+        reviewed_notes,
+        {"health_stale_days": 0, "notes_stale_days": 0},
+        dt.date(2026, 7, 20),
+    )
+    assert disabled_report["item_findings"][0]["rules"] == ["zero_notes"]
+    assert disabled_report["note_findings"] == []
+    assert health_settings({}) == {"health_stale_days": 45, "notes_stale_days": 90}
+    try:
+        health_settings({"health_stale_days": "later"})
+    except ContractError:
+        pass
+    else:
+        raise AssertionError("invalid health threshold accepted")
+    project_report["item_findings"][0]["title"] = '<script>alert("health")</script>'
+    health_html = project_health_body(project_report, {"backlog_ref": "main"}, "abcdef123456")
+    assert '&lt;script&gt;alert(&quot;health&quot;)&lt;/script&gt;' in health_html
+    assert '<script>' not in health_html, "health findings must be HTML-escaped"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        cache_path = tmp_path / "cache"
+        cache_path.mkdir()
+        render_site(
+            {
+                "project": {
+                    "backlog_dir": "docs/backlog",
+                    "backlog_ref": "main",
+                    "github_repo": "",
+                    "name": "Self-test",
+                },
+                "paths": {"cache": cache_path},
+            },
+            _MemorySource({}),
+            health_items,
+            [],
+            reviewed_notes,
+            "abcdef1234567890",
+            {"issue_error": None, "issues": []},
+            tmp_path / "site",
+        )
+        rendered_index = parse_json("rendered index", (tmp_path / "site/data/index.json").read_text(encoding="utf-8"))
+        assert rendered_index["health"]["item_findings"], "rendered index missing backlog health"
+        rendered_health = (tmp_path / "site/health.html").read_text(encoding="utf-8")
+        assert "Backlog findings" in rendered_health and "Notes to review" in rendered_health
 
     unsafe_note = dict(parsed_notes[0])
     unsafe_note["body"] = '<script>alert("note")</script> x" onfocus="alert(1)'
