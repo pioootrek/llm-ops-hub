@@ -68,6 +68,33 @@ class ConfigError(Exception):
     pass
 
 
+class Diagnostic(str):
+    """A validation error with a legacy-compatible text representation."""
+
+    def __new__(cls, file: str, rule: str, message: str):
+        text = f"{file}: {message}" if file else message
+        value = super().__new__(cls, text)
+        value.file = file
+        value.rule = rule
+        value.message = message
+        return value
+
+    def as_dict(self) -> dict[str, str]:
+        return {"file": self.file, "rule": self.rule, "message": self.message}
+
+
+def contract_diagnostic(exc: ContractError, file: str, rule: str) -> Diagnostic:
+    message = str(exc)
+    prefix = f"{file}: "
+    if message.startswith(prefix):
+        message = message[len(prefix):]
+    return Diagnostic(file, rule, message)
+
+
+def diagnostics_json(errors: list[Diagnostic]) -> str:
+    return json.dumps([error.as_dict() for error in errors], ensure_ascii=False)
+
+
 # ---------------------------------------------------------------------------
 # Canonical JSON
 
@@ -398,11 +425,11 @@ def note_manifest_files(source) -> list[str]:
     return [p for p in note_files(source) if p.count("/") == 2 and p.endswith("/" + NOTE_MANIFEST)]
 
 
-def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[Diagnostic]]:
     """Returns (parsed items sorted for display, error messages)."""
     validator = jsonschema.Draft202012Validator(schema)
     areas = project_cfg.get("areas")
-    errors: list[str] = []
+    errors: list[Diagnostic] = []
     items: list[dict[str, Any]] = []
     seen_ids: dict[str, str] = {}
 
@@ -412,32 +439,32 @@ def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) 
             raw = source.read(rel_path)
             data = parse_json(label, raw)
         except ContractError as exc:
-            errors.append(str(exc))
+            errors.append(contract_diagnostic(exc, label, "json.invalid"))
             continue
 
         schema_errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
         if schema_errors:
             for err in schema_errors:
                 where = "/".join(str(p) for p in err.path) or "(root)"
-                errors.append(f"{label}: {where}: {err.message}")
+                errors.append(Diagnostic(label, "schema", f"{where}: {err.message}"))
             continue
 
         item_id = data["id"]
         item_type = data["type"]
         expected_rel = f"{item_type}/{item_id}.json"
         if rel_path != expected_rel:
-            errors.append(f"{label}: file must be at {expected_rel} (id and type define the path)")
+            errors.append(Diagnostic(label, "path.mismatch", f"file must be at {expected_rel} (id and type define the path)"))
         if not item_id.startswith(TYPE_PREFIX[item_type] + "-"):
-            errors.append(f"{label}: id prefix must be {TYPE_PREFIX[item_type]} for type {item_type}")
+            errors.append(Diagnostic(label, "item.id_prefix", f"id prefix must be {TYPE_PREFIX[item_type]} for type {item_type}"))
         if isinstance(areas, list) and areas and data["area"] not in areas:
-            errors.append(f"{label}: area {data['area']!r} not in project config areas")
+            errors.append(Diagnostic(label, "item.area", f"area {data['area']!r} not in project config areas"))
         if item_id in seen_ids:
-            errors.append(f"{label}: duplicate id {item_id} (also in {seen_ids[item_id]})")
+            errors.append(Diagnostic(label, "id.duplicate", f"duplicate id {item_id} (also in {seen_ids[item_id]})"))
         else:
             seen_ids[item_id] = rel_path
 
         if raw != canonical_json(data):
-            errors.append(f"{label}: not in canonical form (run: hub.py fmt)")
+            errors.append(Diagnostic(label, "canonical.form", "not in canonical form (run: hub.py fmt)"))
 
         data["_path"] = rel_path
         items.append(data)
@@ -446,10 +473,10 @@ def validate_items(source, schema: dict[str, Any], project_cfg: dict[str, Any]) 
     return items, errors
 
 
-def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[Diagnostic]]:
     """Returns (done entries newest first, error messages)."""
     validator = jsonschema.Draft202012Validator(schema)
-    errors: list[str] = []
+    errors: list[Diagnostic] = []
     entries: list[dict[str, Any]] = []
     seen_ids: dict[str, str] = {}
 
@@ -459,29 +486,29 @@ def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str
             raw = source.read(rel_path)
             data = parse_json(label, raw)
         except ContractError as exc:
-            errors.append(str(exc))
+            errors.append(contract_diagnostic(exc, label, "json.invalid"))
             continue
 
         schema_errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
         if schema_errors:
             for err in schema_errors:
                 where = "/".join(str(p) for p in err.path) or "(root)"
-                errors.append(f"{label}: {where}: {err.message}")
+                errors.append(Diagnostic(label, "schema", f"{where}: {err.message}"))
             continue
 
         entry_id = data["id"]
         expected_rel = f"{DONE_SUBDIR}/{entry_id}.json"
         if rel_path != expected_rel:
-            errors.append(f"{label}: file must be at {expected_rel} (id defines the path)")
+            errors.append(Diagnostic(label, "path.mismatch", f"file must be at {expected_rel} (id defines the path)"))
         if entry_id[5:13] != data["date"].replace("-", ""):
-            errors.append(f"{label}: id date part must match date {data['date']}")
+            errors.append(Diagnostic(label, "done.id_date", f"id date part must match date {data['date']}"))
         if entry_id in seen_ids:
-            errors.append(f"{label}: duplicate id {entry_id} (also in {seen_ids[entry_id]})")
+            errors.append(Diagnostic(label, "id.duplicate", f"duplicate id {entry_id} (also in {seen_ids[entry_id]})"))
         else:
             seen_ids[entry_id] = rel_path
 
         if raw != canonical_json(data):
-            errors.append(f"{label}: not in canonical form (run: hub.py fmt)")
+            errors.append(Diagnostic(label, "canonical.form", "not in canonical form (run: hub.py fmt)"))
 
         data["_path"] = rel_path
         entries.append(data)
@@ -490,23 +517,23 @@ def validate_done_entries(source, schema: dict[str, Any]) -> tuple[list[dict[str
     return entries, errors
 
 
-def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[Diagnostic]]:
     """Returns (agent notes newest first, error messages). A note is a
     directory notes/<id>/ holding a validated note.json manifest plus
     free-form payload files - only the manifest and the payload envelope
     (allowed types, size) are checked; content belongs to the agents."""
     validator = jsonschema.Draft202012Validator(schema)
-    errors: list[str] = []
+    errors: list[Diagnostic] = []
     notes: list[dict[str, Any]] = []
     by_dir: dict[str, list[str]] = {}
 
     for rel_path in note_files(source):
         parts = rel_path.split("/")
         if len(parts) < 3:
-            errors.append(
-                f"{source.label}/{rel_path}: notes are directories - "
-                f"expected {NOTES_SUBDIR}/<note-id>/{NOTE_MANIFEST} plus free-form files"
-            )
+            errors.append(Diagnostic(
+                f"{source.label}/{rel_path}", "note.layout",
+                f"notes are directories - expected {NOTES_SUBDIR}/<note-id>/{NOTE_MANIFEST} plus free-form files",
+            ))
             continue
         by_dir.setdefault(parts[1], []).append("/".join(parts[2:]))
 
@@ -519,12 +546,12 @@ def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]]
             suffix = Path(rel_file).suffix.lower()
             if suffix not in ALLOWED_NOTE_FILE_SUFFIXES:
                 allowed = " ".join(sorted(ALLOWED_NOTE_FILE_SUFFIXES))
-                errors.append(f"{source.label}/{file_rel}: file type {suffix or '(none)'} not allowed in notes (allowed: {allowed})")
+                errors.append(Diagnostic(f"{source.label}/{file_rel}", "note.file_type", f"file type {suffix or '(none)'} not allowed in notes (allowed: {allowed})"))
             elif source.size(file_rel) > MAX_NOTE_FILE_BYTES:
-                errors.append(f"{source.label}/{file_rel}: exceeds the {MAX_NOTE_FILE_BYTES // (1024 * 1024)} MB note file limit")
+                errors.append(Diagnostic(f"{source.label}/{file_rel}", "note.file_size", f"exceeds the {MAX_NOTE_FILE_BYTES // (1024 * 1024)} MB note file limit"))
 
         if NOTE_MANIFEST not in files:
-            errors.append(f"{dir_label}: missing {NOTE_MANIFEST} manifest")
+            errors.append(Diagnostic(dir_label, "note.manifest_missing", f"missing {NOTE_MANIFEST} manifest"))
             continue
         manifest_rel = f"{NOTES_SUBDIR}/{note_dir}/{NOTE_MANIFEST}"
         label = f"{source.label}/{manifest_rel}"
@@ -532,23 +559,23 @@ def validate_notes(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]]
             raw = source.read(manifest_rel)
             data = parse_json(label, raw)
         except ContractError as exc:
-            errors.append(str(exc))
+            errors.append(contract_diagnostic(exc, label, "json.invalid"))
             continue
 
         schema_errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
         if schema_errors:
             for err in schema_errors:
                 where = "/".join(str(p) for p in err.path) or "(root)"
-                errors.append(f"{label}: {where}: {err.message}")
+                errors.append(Diagnostic(label, "schema", f"{where}: {err.message}"))
             continue
 
         note_id = data["id"]
         if note_id != note_dir:
-            errors.append(f"{label}: id {note_id} must match the directory name {note_dir}")
+            errors.append(Diagnostic(label, "note.id_directory", f"id {note_id} must match the directory name {note_dir}"))
         if note_id[5:13] != data["created"].replace("-", ""):
-            errors.append(f"{label}: id date part must match created {data['created']}")
+            errors.append(Diagnostic(label, "note.id_date", f"id date part must match created {data['created']}"))
         if raw != canonical_json(data):
-            errors.append(f"{label}: not in canonical form (run: hub.py fmt)")
+            errors.append(Diagnostic(label, "canonical.form", "not in canonical form (run: hub.py fmt)"))
 
         data["_path"] = f"{NOTES_SUBDIR}/{note_dir}"
         data["_files"] = payload
@@ -568,17 +595,17 @@ def docs_files(source) -> list[str]:
     ]
 
 
-def validate_docs(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+def validate_docs(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]], list[Diagnostic]]:
     """Returns (docs pages sorted by file name, error messages). Only the
     frontmatter header is contract-checked; the markdown body is free-form
     and kept for the docs-health link scan."""
     validator = jsonschema.Draft202012Validator(schema)
-    errors: list[str] = []
+    errors: list[Diagnostic] = []
     docs: list[dict[str, Any]] = []
 
     files = docs_files(source)
     if not files:
-        errors.append(f"{source.label}: docs module is enabled but has no top-level *.md pages (check docs_dir)")
+        errors.append(Diagnostic(source.label, "docs.empty", "docs module is enabled but has no top-level *.md pages (check docs_dir)"))
 
     for rel_path in files:
         label = f"{source.label}/{rel_path}"
@@ -586,18 +613,18 @@ def validate_docs(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]],
             raw = source.read(rel_path)
             header, body = parse_frontmatter(label, raw)
         except ContractError as exc:
-            errors.append(str(exc))
+            errors.append(contract_diagnostic(exc, label, "docs.frontmatter.invalid"))
             continue
 
         schema_errors = sorted(validator.iter_errors(header), key=lambda e: list(e.path))
         if schema_errors:
             for err in schema_errors:
                 where = "/".join(str(p) for p in err.path) or "(root)"
-                errors.append(f"{label}: {where}: {err.message}")
+                errors.append(Diagnostic(label, "schema", f"{where}: {err.message}"))
             continue
 
         if not raw.startswith(canonical_frontmatter(header)):
-            errors.append(f"{label}: frontmatter not in canonical form (run: hub.py fmt)")
+            errors.append(Diagnostic(label, "docs.frontmatter.canonical", "frontmatter not in canonical form (run: hub.py fmt)"))
 
         # Calendar validity is beyond the schema's regex (2026-02-30 matches
         # the pattern), and a bad date must not survive into docs_health():
@@ -607,7 +634,7 @@ def validate_docs(source, schema: dict[str, Any]) -> tuple[list[dict[str, Any]],
             try:
                 dt.date.fromisoformat(header["last_reviewed"])
             except ValueError:
-                errors.append(f"{label}: last_reviewed is not a real calendar date: {header['last_reviewed']!r}")
+                errors.append(Diagnostic(label, "docs.last_reviewed", f"last_reviewed is not a real calendar date: {header['last_reviewed']!r}"))
                 continue
 
         docs.append({"file": rel_path, "header": header, "_body": body})
@@ -722,12 +749,12 @@ def build_index(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> dic
     }
 
 
-def validate_index(source, items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> list[str]:
+def validate_index(source, items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> list[Diagnostic]:
     expected = canonical_json(build_index(items, notes))
     if INDEX_FILE not in source.list_files():
-        return [f"{source.label}/{INDEX_FILE}: missing (run: hub.py fmt)"]
+        return [Diagnostic(f"{source.label}/{INDEX_FILE}", "index.missing", "missing (run: hub.py fmt)")]
     if source.read(INDEX_FILE) != expected:
-        return [f"{source.label}/{INDEX_FILE}: stale (run: hub.py fmt)"]
+        return [Diagnostic(f"{source.label}/{INDEX_FILE}", "index.stale", "stale (run: hub.py fmt)")]
     return []
 
 
@@ -829,10 +856,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
         docs, docs_errors = validate_docs(_docs_worktree(source, settings), load_docs_schema(source))
         errors += docs_errors
     if errors:
+        if args.json:
+            print(diagnostics_json(errors))
+            return 2
         for error in errors:
             print(error, file=sys.stderr)
         print(f"validate: {len(errors)} error(s)", file=sys.stderr)
         return 2
+    if args.json:
+        print("[]")
+        return 0
     docs_note = f", {len(docs)} docs pages" if settings else ""
     print(f"validate: OK ({len(items)} items, {len(done_entries)} done entries, {len(notes)} notes{docs_note})")
     return 0
@@ -2159,6 +2192,19 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     bad = dict(SAMPLE_ITEM)
     bad["priority"] = "someday"
     expect_error({"feature/FEAT-20260703-sample-item.json": canonical_json(bad)}, "priority")
+    _, structured_errors = validate_items(
+        _MemorySource({"feature/FEAT-20260703-sample-item.json": canonical_json(bad)}), schema, {}
+    )
+    assert structured_errors[0].file.endswith("feature/FEAT-20260703-sample-item.json")
+    assert structured_errors[0].rule == "schema"
+    assert "priority" in structured_errors[0].message
+    assert structured_errors[0].as_dict() == {
+        "file": structured_errors[0].file,
+        "rule": "schema",
+        "message": structured_errors[0].message,
+    }
+    assert json.loads(diagnostics_json(structured_errors)) == [structured_errors[0].as_dict()]
+    assert diagnostics_json([]) == "[]"
 
     bad = json.loads(good)
     del bad["risk"]["rollback"]
@@ -2510,6 +2556,8 @@ def main() -> int:
     for name, fn in [("fmt", cmd_fmt), ("validate", cmd_validate)]:
         p = sub.add_parser(name)
         p.add_argument("--backlog-dir", default="docs/backlog", help="backlog directory in the project working copy")
+        if name == "validate":
+            p.add_argument("--json", action="store_true", help="emit diagnostics as a JSON array on stdout")
         p.set_defaults(fn=fn)
 
     for name, fn in [("sync", cmd_sync), ("build", cmd_build), ("serve", cmd_serve)]:
@@ -2525,6 +2573,10 @@ def main() -> int:
     try:
         return args.fn(args)
     except (ContractError, ConfigError) as exc:
+        if getattr(args, "json", False):
+            error = Diagnostic("", "configuration", str(exc))
+            print(json.dumps([error.as_dict()], ensure_ascii=False))
+            return 2
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

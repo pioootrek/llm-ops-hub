@@ -7,8 +7,8 @@ git is the database, one canonical form, fail-closed build, minimal
 dependencies). This file extends `docs/proposals/2026-07-hub-improvements.md`;
 items already proposed or implemented from it are referenced, not repeated.
 
-Progress (2026-08-11): 1.1 (repository CI) and 1.3 (HTML escaping
-self-tests) are implemented.
+Progress (2026-08-20): 1.1 (repository CI), 1.2 (`validate --json`), and
+1.3 (HTML escaping self-tests) are implemented.
 
 ## The rule: mega simple, mega functional
 
@@ -149,6 +149,69 @@ the field visible and selectable as the fallback: the hub is intentionally
 served over LAN HTTP, where a secure clipboard context is not guaranteed. The
 human pastes the payload into whatever tracker or commit message the project
 uses. No write path, no new dependency.
+
+### 2.5 Repository instruction sources map
+
+Add an opt-in, report-only tree view for answering: "which repository
+instruction files apply to work in this directory?" This is a debugging aid
+for humans, not an authoritative reconstruction of an agent's full runtime
+prompt. The page must state that user, enterprise, skill, plugin, subagent, and
+system-prompt layers are outside the hub's view.
+
+The MVP supports only a versioned `Codex` profile: select a directory and list
+the applicable `AGENTS.md` files from repository root to that directory in
+precedence order, with provenance links. Render each source once as escaped
+plain text; the directory view references sources rather than duplicating every
+combined chain. `data/index.json` exposes ordered paths and content hashes, not
+copied instruction text. Do not use an LLM to infer semantic conflicts or claim
+that one natural-language instruction overrides another.
+
+Enable the feature through project config, resolved by an
+`instructions_settings()` path analogous to `docs_settings()`, because scanning
+instruction files expands the content published beyond `backlog_dir`. A future
+`Claude` profile requires a fresh check against vendor documentation and must
+be described as repository instruction sources discoverable for a path, not
+"what Claude loads". The project's `CLAUDE.md` equals `@AGENTS.md` convention
+belongs in optional report-only lint findings, not in profile resolution.
+
+Treat monitored-repository paths and file contents as untrusted input. Never
+follow symlinks or read outside the mirrored commit; cap file count, bytes per
+file, total bytes, and any future include depth. Limit violations produce
+visible truncation findings, never silent output changes. Escaping self-tests
+from phase 1.3 are a prerequisite. Add fixture coverage for nested scopes,
+sibling isolation, case-sensitive names, symlinks, traversal attempts, source
+ordering, size limits, and convention-lint findings before exposing the UI.
+
+**Design review outcome (Codex + Claude Opus, 2026-08-11): conditional go.**
+The failure mode is real: reviewers and operators need to explain why an agent
+behaved differently in one subtree, and today the applicable instruction
+sources are easy to miss. The feature is valuable only while it preserves the
+hub's strongest property: every claim shown in the UI is deterministic and
+verifiable from the mirrored Git commit.
+
+Accepted for the first implementation:
+
+- a human-facing map of repository-visible instruction sources;
+- explicit source order, scope, provenance, and content hashes;
+- a Codex ancestry profile whose rules carry an "as of" date;
+- optional lint findings for this project's `AGENTS.md` / `CLAUDE.md` pairing;
+- opt-in project configuration and strict publication limits;
+- escaped plain-text previews, with each source stored and rendered once.
+
+Deferred until independently specified and checked against current vendor
+documentation:
+
+- a Claude profile, because Claude Code can load project instructions lazily
+  and can include user-level, enterprise, imported, skill, plugin, subagent,
+  and system-prompt layers that the hub cannot observe;
+- import expansion, including `@AGENTS.md`, because repository-external imports
+  must remain unresolved and visibly marked as outside the hub's view;
+- any claim that the output equals the complete context seen by an agent.
+
+Rejected for this feature: semantic conflict resolution by an LLM, silently
+following symlinks, publishing combined instruction text in `data/index.json`,
+enabling repository-wide instruction discovery by default, or blocking a valid
+backlog build because an advisory instruction-lint finding exists.
 
 ## Phase 3 - document boundaries before open-sourcing
 

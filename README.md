@@ -278,6 +278,20 @@ machine share the hub, pin the tool path behind an environment variable in
 the snippet (for example `LLM_OPS_HUB_DIR`, defaulting to a sibling
 checkout) so agents do not hard-code a machine-specific location.
 
+For automation, `validate` also accepts `--json`. It writes only a JSON array
+to stdout: `[]` on success, or objects with stable `file`, `rule`, and
+`message` fields on failure. Its exit codes remain `0` for a valid contract
+and `2` for validation or configuration errors; the default human-readable
+output is unchanged.
+
+Stable rule identifiers in schema version 1 are `schema`, `json.invalid`,
+`canonical.form`, `path.mismatch`, `id.duplicate`, `item.id_prefix`,
+`item.area`, `done.id_date`, `note.layout`, `note.file_type`,
+`note.file_size`, `note.manifest_missing`, `note.id_directory`,
+`note.id_date`, `docs.empty`, `docs.frontmatter.invalid`,
+`docs.frontmatter.canonical`, `docs.last_reviewed`, `index.missing`,
+`index.stale`, and `configuration`.
+
 ### 3. Stand up the hub worker
 
 On the LAN machine that renders and serves the site:
