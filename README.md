@@ -8,6 +8,11 @@ monitored repository.
 Project identity, repository location, backlog ref, and runtime paths come
 from the instance configuration.
 
+One hub instance monitors one project. Run another instance with its own
+configuration and runtime paths for each additional project. Multi-project
+support would require a separate design. The current configuration has no
+multi-project mode.
+
 ## How it works
 
 - **Git is the database.** One backlog item = one canonical JSON file in the

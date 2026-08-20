@@ -94,6 +94,10 @@ and must stay out of commits.
   for every monitored project: bump/consider `schema_version`, update
   `templates/AGENTS.md` and `README.md` in the same commit, and say so in
   the commit message.
+- A `schema_version` bump must state how existing projects move to the new
+  contract. Ship a `hub.py migrate` command when migration can be automated.
+  Otherwise document the manual steps and state that no automated migration
+  exists. Do not bump the version without choosing one of those paths.
 - Generic workflow improvements discovered in adopted projects (command
   blocks, evidence conventions, query patterns) belong back in
   `templates/AGENTS.md` and the README onboarding snippet: harvest them in
