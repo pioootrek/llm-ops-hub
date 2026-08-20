@@ -4,6 +4,11 @@
     "example-area-two"
   ],
   "health_stale_days": 45,
+  "instructions_dir": "",
+  "instructions_lint_claude_include": false,
+  "instructions_max_file_bytes": 65536,
+  "instructions_max_files": 5000,
+  "instructions_max_total_bytes": 524288,
   "notes_stale_days": 90,
   "schema_version": 1
 }

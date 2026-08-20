@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import jsonschema
@@ -62,6 +62,11 @@ NOTE_TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".log"}
 NOTE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 ALLOWED_NOTE_FILE_SUFFIXES = NOTE_TEXT_SUFFIXES | NOTE_IMAGE_SUFFIXES
 MAX_NOTE_FILE_BYTES = 5 * 1024 * 1024
+INSTRUCTIONS_PROFILE = "codex-repository-v1"
+INSTRUCTIONS_PROFILE_AS_OF = "2026-08-20"
+INSTRUCTIONS_MAX_FILES_DEFAULT = 5000
+INSTRUCTIONS_MAX_FILE_BYTES_DEFAULT = 64 * 1024
+INSTRUCTIONS_MAX_TOTAL_BYTES_DEFAULT = 512 * 1024
 
 
 class ContractError(Exception):
@@ -335,6 +340,42 @@ class MirrorSource:
         return entries[rel_path]
 
 
+class MirrorRepoSource:
+    """Reads repository entries directly from a bare mirror without checking
+    them out. Modes remain visible so report-only scanners can reject symlinks
+    instead of following them."""
+
+    def __init__(self, mirror: Path, ref: str):
+        self.mirror = mirror
+        self.ref = ref
+        self.label = ref
+
+    def list_entries(self) -> list[dict[str, Any]]:
+        result = run(["git", f"--git-dir={self.mirror}", "ls-tree", "-r", "-l", "-z", self.ref])
+        if result.returncode != 0:
+            raise ContractError(f"could not list repository at {self.ref}: {result.stderr.strip()}")
+        entries = []
+        for line in result.stdout.split("\0"):
+            if not line:
+                continue
+            meta, separator, path = line.partition("\t")
+            fields = meta.split()
+            if not separator or len(fields) < 4:
+                continue
+            size = int(fields[3]) if fields[3].isdigit() else 0
+            entries.append({"mode": fields[0], "path": path, "size": size})
+        return entries
+
+    def read_bytes(self, rel_path: str) -> bytes:
+        result = subprocess.run(
+            ["git", f"--git-dir={self.mirror}", "show", f"{self.ref}:{rel_path}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if result.returncode != 0:
+            raise ContractError(f"could not read {rel_path} at {self.ref}")
+        return result.stdout
+
+
 # ---------------------------------------------------------------------------
 # Contract: schema + cross-file rules
 
@@ -391,6 +432,191 @@ def docs_settings(project_cfg: dict[str, Any]) -> dict[str, Any] | None:
         "dir": docs_dir,
         "index_file": str(project_cfg.get("docs_index_file", "")).strip(),
         "stale_days": stale_days,
+    }
+
+
+def _repo_relative_dir(value: Any, label: str) -> str:
+    raw = str(value).strip()
+    if raw == ".":
+        return "."
+    if not raw or raw.startswith("/") or "\\" in raw:
+        raise ContractError(f"project config: {label} must be a repo-root-relative directory")
+    parts = PurePosixPath(raw).parts
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ContractError(f"project config: {label} must not contain . or .. path segments")
+    return "/".join(parts)
+
+
+def instructions_settings(project_cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """Repository instruction publication is opt-in because it reads beyond
+    the backlog directory. The profile is deliberately fixed and versioned."""
+    raw_dir = project_cfg.get("instructions_dir")
+    if raw_dir is None or str(raw_dir).strip() == "":
+        return None
+    settings: dict[str, Any] = {"dir": _repo_relative_dir(raw_dir, "instructions_dir")}
+    for key, default in [
+        ("instructions_max_files", INSTRUCTIONS_MAX_FILES_DEFAULT),
+        ("instructions_max_file_bytes", INSTRUCTIONS_MAX_FILE_BYTES_DEFAULT),
+        ("instructions_max_total_bytes", INSTRUCTIONS_MAX_TOTAL_BYTES_DEFAULT),
+    ]:
+        try:
+            value = int(project_cfg.get(key, default))
+        except (TypeError, ValueError) as exc:
+            raise ContractError(f"project config: {key} must be an integer: {exc}") from exc
+        if value < 1:
+            raise ContractError(f"project config: {key} must be at least 1")
+        settings[key.removeprefix("instructions_")] = value
+    lint = project_cfg.get("instructions_lint_claude_include", False)
+    if not isinstance(lint, bool):
+        raise ContractError("project config: instructions_lint_claude_include must be a boolean")
+    settings["lint_claude_include"] = lint
+    return settings
+
+
+def _path_in_scope(path: str, root: str) -> bool:
+    return root == "." or path == root or path.startswith(root + "/")
+
+
+def _ancestor_dirs(directory: str) -> list[str]:
+    if directory == ".":
+        return ["."]
+    parts = directory.split("/")
+    return ["."] + ["/".join(parts[:index]) for index in range(1, len(parts) + 1)]
+
+
+def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[str, Any]:
+    """Build the report from immutable Git tree entries. Content is retained
+    only for the HTML renderer; callers strip it from the JSON projection."""
+    root = settings["dir"]
+    findings: list[dict[str, str]] = []
+    safe_entries = []
+    for entry in repo_source.list_entries():
+        path = entry["path"]
+        pure = PurePosixPath(path)
+        if path.startswith("/") or "\\" in path or any(part in {"", ".", ".."} for part in pure.parts):
+            findings.append({
+                "code": "unsafe-path", "path": path,
+                "message": "Ignored a repository entry with an unsafe path.",
+            })
+            continue
+        safe_entries.append(entry)
+    safe_entries.sort(key=lambda entry: entry["path"])
+    scoped = [entry for entry in safe_entries if _path_in_scope(entry["path"], root)]
+    if len(scoped) > settings["max_files"]:
+        findings.append({
+            "code": "file-limit", "path": root,
+            "message": (
+                f"Directory map truncated after {settings['max_files']} of {len(scoped)} repository files."
+            ),
+        })
+        scoped = scoped[:settings["max_files"]]
+
+    directories = {root}
+    for entry in scoped:
+        parent = str(PurePosixPath(entry["path"]).parent)
+        for directory in _ancestor_dirs(parent):
+            if _path_in_scope(directory, root):
+                directories.add(directory)
+
+    entries_by_path = {entry["path"]: entry for entry in safe_entries}
+    source_records: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+
+    def load_source(path: str, entry: dict[str, Any]) -> dict[str, Any]:
+        nonlocal total_bytes
+        if path in source_records:
+            return source_records[path]
+        record: dict[str, Any] = {"bytes": entry["size"], "path": path, "sha256": None, "content": None}
+        if entry["mode"] == "120000":
+            findings.append({
+                "code": "symlink", "path": path,
+                "message": "Ignored symlink; instruction reports never follow repository symlinks.",
+            })
+        elif entry["size"] > settings["max_file_bytes"]:
+            findings.append({
+                "code": "file-bytes-limit", "path": path,
+                "message": f"Source omitted because it exceeds the {settings['max_file_bytes']}-byte file limit.",
+            })
+        elif total_bytes + entry["size"] > settings["max_total_bytes"]:
+            findings.append({
+                "code": "total-bytes-limit", "path": path,
+                "message": f"Source omitted because the {settings['max_total_bytes']}-byte total limit was reached.",
+            })
+        else:
+            data = repo_source.read_bytes(path)
+            total_bytes += len(data)
+            record["bytes"] = len(data)
+            record["sha256"] = hashlib.sha256(data).hexdigest()
+            record["content"] = data.decode("utf-8", errors="replace")
+        source_records[path] = record
+        return record
+
+    directory_records = []
+    for directory in sorted(directories, key=lambda value: (value.count("/"), value)):
+        chain = []
+        for ancestor in _ancestor_dirs(directory):
+            prefix = "" if ancestor == "." else ancestor + "/"
+            chosen = None
+            for filename in ("AGENTS.override.md", "AGENTS.md"):
+                candidate = prefix + filename
+                entry = entries_by_path.get(candidate)
+                if entry is None:
+                    continue
+                if entry["mode"] == "120000":
+                    load_source(candidate, entry)
+                    continue
+                if entry["size"] == 0:
+                    continue
+                chosen = load_source(candidate, entry)
+                break
+            if chosen is not None:
+                chain.append({"path": chosen["path"], "sha256": chosen["sha256"]})
+        directory_records.append({"path": directory, "sources": chain})
+
+    if settings["lint_claude_include"]:
+        agent_dirs = {
+            str(PurePosixPath(path).parent)
+            for path in source_records
+            if PurePosixPath(path).name in {"AGENTS.md", "AGENTS.override.md"}
+        }
+        for directory in sorted(agent_dirs):
+            prefix = "" if directory == "." else directory + "/"
+            claude_path = prefix + "CLAUDE.md"
+            claude = entries_by_path.get(claude_path)
+            if claude is None:
+                findings.append({
+                    "code": "claude-include-missing", "path": claude_path,
+                    "message": "Optional convention lint: matching CLAUDE.md is missing.",
+                })
+                continue
+            record = load_source(claude_path, claude)
+            if record["content"] is not None and record["content"].strip() != "@AGENTS.md":
+                findings.append({
+                    "code": "claude-include-mismatch", "path": claude_path,
+                    "message": "Optional convention lint: expected the file to contain only @AGENTS.md.",
+                })
+
+    return {
+        "profile": INSTRUCTIONS_PROFILE,
+        "profile_as_of": INSTRUCTIONS_PROFILE_AS_OF,
+        "dir": root,
+        "directories": directory_records,
+        "findings": findings,
+        "sources": [source_records[path] for path in sorted(source_records)],
+    }
+
+
+def instruction_sources_json(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "profile": report["profile"],
+        "profile_as_of": report["profile_as_of"],
+        "dir": report["dir"],
+        "directories": report["directories"],
+        "findings": report["findings"],
+        "sources": [
+            {key: source[key] for key in ("bytes", "path", "sha256")}
+            for source in report["sources"]
+        ],
     }
 
 
@@ -907,6 +1133,7 @@ def cmd_fmt(args: argparse.Namespace) -> int:
     schema = load_schema(source)
     project_cfg = load_project_config(source)
     health_settings(project_cfg)
+    instructions_settings(project_cfg)
     settings = docs_settings(project_cfg)
     docs_source = _docs_worktree(source, settings) if settings else None
     if docs_source is not None:
@@ -953,6 +1180,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     schema = load_schema(source)
     project_cfg = load_project_config(source)
     health_settings(project_cfg)
+    instructions_settings(project_cfg)
     items, errors = validate_items(source, schema, project_cfg)
     done_entries, done_errors = validate_done_entries(source, load_done_schema(source))
     errors += done_errors
@@ -1104,6 +1332,12 @@ def cmd_build(args: argparse.Namespace) -> int:
         docs_source = MirrorSource(paths["mirror"], project["backlog_ref"], settings["dir"])
         docs, docs_errors = validate_docs(docs_source, load_docs_schema(source))
         errors += docs_errors
+    instruction_cfg = instructions_settings(project_cfg)
+    instructions_report = None
+    if instruction_cfg:
+        instructions_report = instruction_sources_report(
+            MirrorRepoSource(paths["mirror"], project["backlog_ref"]), instruction_cfg
+        )
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -1120,6 +1354,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     render_site(
         cfg, source, items, done_entries, notes, commit, github, release,
         docs=docs, docs_source=docs_source, docs_cfg=settings,
+        instructions_report=instructions_report,
     )
 
     tmp_link = paths["root"] / "public.next"
@@ -1236,7 +1471,7 @@ FEEDBACK_COPY_SCRIPT = """
 """
 
 
-def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "", with_docs: bool = False) -> str:
+def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "", with_docs: bool = False, with_instructions: bool = False) -> str:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
@@ -1244,6 +1479,7 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
         ("done", "done.html", "Done"),
         ("health", "health.html", "Health"),
         *([("docs", "docs.html", "Docs")] if with_docs else []),
+        *([("instructions", "instructions.html", "Instructions")] if with_instructions else []),
         ("data", "data/index.json", "JSON"),
     ]
     nav = "".join(
@@ -1793,6 +2029,85 @@ def docs_health_body(
     )
 
 
+def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], commit: str) -> str:
+    source_ids = {
+        source["path"]: "instruction-source-" + hashlib.sha256(source["path"].encode("utf-8")).hexdigest()[:12]
+        for source in report["sources"]
+    }
+    options = "".join(
+        f'<option value="{h(directory["path"])}">{h(directory["path"])}</option>'
+        for directory in report["directories"]
+    )
+    chains = []
+    for index, directory in enumerate(report["directories"]):
+        links = []
+        for position, source in enumerate(directory["sources"], start=1):
+            hash_label = source["sha256"][:12] if source["sha256"] else "content omitted"
+            links.append(
+                f'<li><span class=pill>{position}</span> '
+                f'<a href="#{source_ids[source["path"]]}"><code>{h(source["path"])}</code></a> '
+                f'<span class=muted>sha256 {h(hash_label)}</span></li>'
+            )
+        empty = '<p class=muted>No profile source applies to this directory.</p>'
+        chains.append(
+            f'<section class="card instruction-chain" data-instruction-dir="{h(directory["path"])}"'
+            + ("" if index == 0 else " hidden")
+            + "><h2>Source order</h2>"
+            + (f'<ol class=instruction-order>{"".join(links)}</ol>' if links else empty)
+            + '<p class=muted>Root sources appear first. This is discovery order, not a semantic conflict analysis.</p></section>'
+        )
+    findings = "".join(
+        f'<li><code>{h(finding["path"])}</code> — {h(finding["message"])}</li>'
+        for finding in report["findings"]
+    )
+    findings_card = (
+        '<section class=card><h2>Findings</h2>'
+        + (f'<ul>{findings}</ul>' if findings else '<p class=muted>No report findings.</p>')
+        + "</section>"
+    )
+    previews = []
+    for source in report["sources"]:
+        digest = source["sha256"] or "unavailable"
+        if source["content"] is None:
+            content = '<p class=warn>Content was not published. See the report findings above.</p>'
+        else:
+            content = f'<pre>{h(source["content"])}</pre>'
+        previews.append(
+            f'<article class=card id="{source_ids[source["path"]]}"><h2><code>{h(source["path"])}</code></h2>'
+            f'<p class=muted>{source["bytes"]} bytes · sha256 <code>{h(digest)}</code></p>{content}</article>'
+        )
+    return (
+        '<div class=page-heading><div><h1>Repository instruction sources</h1>'
+        f'<p class=muted>Report for <code>{h(report["dir"])}</code> at '
+        f'<code>{h(project["backlog_ref"])}</code> @ <code>{h(commit[:10])}</code>.</p></div>'
+        f'<div class=heading-meta><span class=pill>{h(report["profile"])}</span>'
+        f'<span class=pill>rules as of {h(report["profile_as_of"])}</span></div></div>'
+        '<div class=warn><strong>This is not the agent runtime prompt.</strong> The hub only maps repository-visible '
+        'sources covered by this profile. User, enterprise, skill, plugin, subagent, system-prompt, configured fallback, '
+        'and repository-external layers are outside its view.</div>'
+        '<section class=card><div class=control><label for=instruction-directory>Directory</label>'
+        f'<select id=instruction-directory>{options}</select></div></section>'
+        + "".join(chains)
+        + findings_card
+        + '<h2>Sources</h2><p class=muted>Each source is rendered once. Directory chains link back to these previews.</p>'
+        + ("".join(previews) if previews else '<p class=muted>No instruction sources found.</p>')
+        + """
+<script>
+(function () {
+  const select = document.getElementById("instruction-directory");
+  const chains = Array.from(document.querySelectorAll("[data-instruction-dir]"));
+  if (!select) return;
+  function showChain() {
+    chains.forEach((chain) => { chain.hidden = chain.dataset.instructionDir !== select.value; });
+  }
+  select.addEventListener("change", showChain);
+  showChain();
+})();
+</script>
+"""
+    )
+
+
 def render_site(
     cfg: dict[str, Any],
     source,
@@ -1806,6 +2121,7 @@ def render_site(
     docs: list[dict[str, Any]] | None = None,
     docs_source=None,
     docs_cfg: dict[str, Any] | None = None,
+    instructions_report: dict[str, Any] | None = None,
 ) -> None:
     project = cfg["project"]
     name = project["name"]
@@ -1813,6 +2129,7 @@ def render_site(
     issues = github["issues"]
     issue_error = github["issue_error"]
     with_docs = docs is not None and docs_source is not None and docs_cfg is not None
+    with_instructions = instructions_report is not None
 
     (out / "assets").mkdir(parents=True, exist_ok=True)
     (out / "data").mkdir(parents=True, exist_ok=True)
@@ -1854,6 +2171,8 @@ def render_site(
                 for doc in docs
             ],
         }
+    if with_instructions:
+        index_data["instructions"] = instruction_sources_json(instructions_report)
     (out / "data/index.json").write_text(canonical_json(index_data), encoding="utf-8")
     (cfg["paths"]["cache"] / "index.json").write_text(canonical_json(index_data), encoding="utf-8")
 
@@ -1918,6 +2237,13 @@ def render_site(
             + "<p><a href=docs.html>Open docs health →</a></p>"
         )
         home.insert(4, card("Docs health", docs_summary))
+    if with_instructions:
+        home.insert(5, card(
+            "Instruction sources",
+            f'<p>{len(instructions_report["directories"])} mapped directorie(s), '
+            f'{len(instructions_report["sources"])} source(s).</p>'
+            '<p><a href=instructions.html>Open instruction map →</a></p>',
+        ))
     if has_github:
         issue_links = "".join(
             f'<p><a href="{h(i["url"])}">#{h(i["number"])}</a> {h(i["title"])}</p>' for i in issues[:5]
@@ -1948,6 +2274,7 @@ def render_site(
             generated_at=generated_at,
             css_version=css_version,
             with_docs=with_docs,
+            with_instructions=with_instructions,
         ),
         encoding="utf-8",
     )
@@ -2179,7 +2506,7 @@ document.documentElement.classList.add("js");
         + backlog_script
     )
     (out / "backlog.html").write_text(
-        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version, with_docs=with_docs),
+        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions),
         encoding="utf-8",
     )
 
@@ -2247,7 +2574,7 @@ document.documentElement.classList.add("js");
 """
     )
     (out / "notes.html").write_text(
-        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version, with_docs=with_docs),
+        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions),
         encoding="utf-8",
     )
 
@@ -2321,7 +2648,7 @@ document.documentElement.classList.add("js");
 </script>
 """
     (out / "done.html").write_text(
-        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version, with_docs=with_docs),
+        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions),
         encoding="utf-8",
     )
 
@@ -2334,6 +2661,7 @@ document.documentElement.classList.add("js");
             generated_at=generated_at,
             css_version=css_version,
             with_docs=with_docs,
+            with_instructions=with_instructions,
         ),
         encoding="utf-8",
     )
@@ -2348,6 +2676,22 @@ document.documentElement.classList.add("js");
                 generated_at=generated_at,
                 css_version=css_version,
                 with_docs=True,
+                with_instructions=with_instructions,
+            ),
+            encoding="utf-8",
+        )
+
+    if with_instructions:
+        (out / "instructions.html").write_text(
+            page(
+                name,
+                "Instruction sources",
+                instruction_sources_body(instructions_report, project, commit),
+                active="instructions",
+                generated_at=generated_at,
+                css_version=css_version,
+                with_docs=with_docs,
+                with_instructions=True,
             ),
             encoding="utf-8",
         )
@@ -2422,6 +2766,24 @@ class _MemorySource:
 
     def size(self, rel_path: str) -> int:
         return len(self.read_bytes(rel_path))
+
+
+class _InstructionMemorySource:
+    def __init__(self, files: dict[str, Any]):
+        self.files = files
+
+    def list_entries(self) -> list[dict[str, Any]]:
+        entries = []
+        for path, raw in self.files.items():
+            mode, value = raw if isinstance(raw, tuple) else ("100644", raw)
+            data = value if isinstance(value, bytes) else value.encode("utf-8")
+            entries.append({"mode": mode, "path": path, "size": len(data)})
+        return entries
+
+    def read_bytes(self, rel_path: str) -> bytes:
+        raw = self.files[rel_path]
+        _, value = raw if isinstance(raw, tuple) else ("100644", raw)
+        return value if isinstance(value, bytes) else value.encode("utf-8")
 
 
 def cmd_self_test(_args: argparse.Namespace) -> int:
@@ -2861,6 +3223,112 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert docs_settings({}) is None, "docs module must default to disabled"
     settings = docs_settings({"docs_dir": "docs/", "docs_index_file": "playbooks.md"})
     assert settings == {"dir": "docs", "index_file": "playbooks.md", "stale_days": DOCS_STALE_DAYS_DEFAULT}, settings
+
+    assert instructions_settings({}) is None, "instruction map must default to disabled"
+    instruction_cfg = instructions_settings({
+        "instructions_dir": ".",
+        "instructions_lint_claude_include": True,
+    })
+    instruction_repo = _InstructionMemorySource({
+        "AGENTS.md": "root <script>alert('root')</script>\n",
+        "CLAUDE.md": "@AGENTS.md\n",
+        "src/AGENTS.md": "src rules\n",
+        "src/CLAUDE.md": "not the include\n",
+        "src/api/AGENTS.md": "ignored because override exists\n",
+        "src/api/AGENTS.override.md": "api override\n",
+        "src/api/agents.md": "wrong case\n",
+        "src/api/main.py": "pass\n",
+        "src/other/main.py": "pass\n",
+        "sibling/AGENTS.md": "sibling only\n",
+        "sibling/main.py": "pass\n",
+        "linked/AGENTS.md": ("120000", "../AGENTS.md"),
+        "linked/main.py": "pass\n",
+    })
+    instruction_report = instruction_sources_report(instruction_repo, instruction_cfg)
+    mapped = {directory["path"]: directory["sources"] for directory in instruction_report["directories"]}
+    assert [source["path"] for source in mapped["src/api"]] == [
+        "AGENTS.md", "src/AGENTS.md", "src/api/AGENTS.override.md",
+    ], "nested Codex sources must be ordered root to target, with override precedence"
+    assert [source["path"] for source in mapped["src/other"]] == [
+        "AGENTS.md", "src/AGENTS.md",
+    ], "sibling instructions must not leak into another subtree"
+    assert [source["path"] for source in mapped["sibling"]] == ["AGENTS.md", "sibling/AGENTS.md"]
+    assert "src/api/agents.md" not in {source["path"] for source in instruction_report["sources"]}, (
+        "instruction filenames must be case-sensitive"
+    )
+    assert [source["path"] for source in mapped["linked"]] == ["AGENTS.md"], "symlinks must not enter a chain"
+    finding_codes = {finding["code"] for finding in instruction_report["findings"]}
+    assert {"symlink", "claude-include-mismatch", "claude-include-missing"} <= finding_codes
+    public_instruction_report = instruction_sources_json(instruction_report)
+    assert all("content" not in source for source in public_instruction_report["sources"]), (
+        "data/index.json must never publish instruction text"
+    )
+    instruction_html = instruction_sources_body(
+        instruction_report, {"backlog_ref": "main"}, "abcdef123456"
+    )
+    assert "&lt;script&gt;alert(&#x27;root&#x27;)&lt;/script&gt;" in instruction_html
+    assert "<script>alert('root')</script>" not in instruction_html
+    assert instruction_html.count("root &lt;script&gt;") == 1, "each source preview must render once"
+    assert "This is not the agent runtime prompt" in instruction_html
+
+    limited_cfg = instructions_settings({
+        "instructions_dir": ".",
+        "instructions_max_files": 2,
+        "instructions_max_file_bytes": 4,
+        "instructions_max_total_bytes": 4,
+    })
+    limited_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "12345",
+        "a/file.py": "x",
+        "b/file.py": "x",
+    }), limited_cfg)
+    limited_codes = {finding["code"] for finding in limited_report["findings"]}
+    assert {"file-limit", "file-bytes-limit"} <= limited_codes, "publication limits must be visible findings"
+    total_limited_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "root",
+        "nested/AGENTS.md": "nest",
+        "nested/file.py": "x",
+    }), instructions_settings({
+        "instructions_dir": ".",
+        "instructions_max_file_bytes": 4,
+        "instructions_max_total_bytes": 4,
+    }))
+    assert any(finding["code"] == "total-bytes-limit" for finding in total_limited_report["findings"])
+    for unsafe_dir in ("../private", "/absolute", "docs/../private", "docs\\private"):
+        try:
+            instructions_settings({"instructions_dir": unsafe_dir})
+        except ContractError:
+            pass
+        else:
+            raise AssertionError(f"unsafe instructions_dir accepted: {unsafe_dir!r}")
+    unsafe_report = instruction_sources_report(
+        _InstructionMemorySource({"../AGENTS.md": "escape", "safe/file.py": "pass"}),
+        instructions_settings({"instructions_dir": "."}),
+    )
+    assert any(finding["code"] == "unsafe-path" for finding in unsafe_report["findings"])
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        cache_path = tmp_path / "cache"
+        cache_path.mkdir()
+        render_site(
+            {
+                "project": {
+                    "backlog_dir": "docs/backlog", "backlog_ref": "main",
+                    "github_repo": "", "name": "Instruction fixture",
+                },
+                "paths": {"cache": cache_path},
+            },
+            _MemorySource({}), health_items, [], reviewed_notes, "abcdef1234567890",
+            {"issue_error": None, "issues": []}, tmp_path / "site",
+            instructions_report=instruction_report,
+        )
+        rendered = parse_json(
+            "instruction index", (tmp_path / "site/data/index.json").read_text(encoding="utf-8")
+        )
+        assert "instructions" in rendered and "content" not in canonical_json(rendered["instructions"])
+        rendered_instructions = (tmp_path / "site/instructions.html").read_text(encoding="utf-8")
+        assert "Repository instruction sources" in rendered_instructions
+        assert 'href="instructions.html"' in (tmp_path / "site/index.html").read_text(encoding="utf-8")
 
     mixed = _MemorySource({
         "feature/FEAT-20260703-sample-item.json": good,

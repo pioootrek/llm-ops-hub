@@ -189,6 +189,41 @@ card and a `docs` block in `data/index.json` for agents). It reports status
 counts, overdue reviews, pages missing from the index file, and dead relative
 links. Stale reviews and dead links do not block a release. Broken headers do.
 
+## Repository instruction map (optional)
+
+The instruction map answers a narrow debugging question: which versioned
+repository instruction sources apply to work in a selected directory? Set
+`instructions_dir` in the project's backlog `config.json` to a repo-relative
+subtree, or to `.` for the whole repository. Leaving it unset or empty keeps
+the feature off.
+
+The first profile is `codex-repository-v1`, checked against the
+[Codex `AGENTS.md` discovery rules](https://developers.openai.com/codex/guides/agents-md)
+on 2026-08-20. It walks from the repository root to the selected directory,
+choosing `AGENTS.override.md` before `AGENTS.md` in each directory and showing
+the resulting sources in discovery order. Configured fallback filenames are
+not part of this fixed profile.
+
+This is not a reconstruction of an agent's prompt. Global, user, enterprise,
+skill, plugin, subagent, system-prompt, configured fallback, and external
+sources remain outside the hub's view. The report does not expand imports or
+guess which natural-language rule wins.
+
+| Project config key | Meaning | Default |
+| --- | --- | --- |
+| `instructions_dir` | repo-root-relative subtree to map; `.` maps the repository and a non-empty value enables the page | unset (disabled) |
+| `instructions_max_files` | maximum repository files used to build the directory map | `5000` |
+| `instructions_max_file_bytes` | maximum bytes published from one instruction source | `65536` |
+| `instructions_max_total_bytes` | maximum instruction bytes published in one report | `524288` |
+| `instructions_lint_claude_include` | report deviations from this project's `CLAUDE.md` = `@AGENTS.md` convention | `false` |
+
+The scanner reads the mirrored Git tree at the configured ref and never
+follows symlinks. File-count and byte limits produce visible findings instead
+of silently changing the report. Findings are advisory and do not block a
+valid backlog release. `instructions.html` contains escaped, plain-text source
+previews, each rendered once. `data/index.json` contains ordered paths,
+provenance hashes, limits findings, and no instruction text.
+
 ## Human feedback
 
 The hub is read-only, but when `project.github_repo` is set, each rendered

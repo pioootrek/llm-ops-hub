@@ -14,6 +14,8 @@ Items 2.1 and 2.2 are implemented as one Health report.
 Item 2.3 is implemented: item cards and JSON expose exact note references.
 Item 2.4 is implemented: projects without GitHub get selectable feedback
 payloads.
+Item 2.5 is implemented: opt-in Codex repository instruction sources are
+mapped by directory with provenance hashes and bounded, escaped previews.
 
 ## The rule: mega simple, mega functional
 
