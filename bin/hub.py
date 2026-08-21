@@ -1603,10 +1603,45 @@ CSS = (
     '.dash-queue{margin-top:0}.queue-list{margin:0;padding:0;list-style:none}'
     '.queue-list li{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--border)}'
     '.queue-list li:last-child{border-bottom:0}.queue-list .pill{margin-left:auto}'
+    '.instruction-explorer{display:grid;grid-template-columns:minmax(250px,320px) minmax(0,1fr);min-height:560px;'
+    'border:1px solid var(--border);border-radius:var(--radius);background:var(--border);overflow:hidden;margin-top:14px;box-shadow:var(--shadow)}'
+    '.instruction-navigator,.instruction-workspace{background:var(--card);min-width:0}.instruction-navigator{border-right:1px solid var(--border);padding:14px}'
+    '.instruction-navigator-header{margin-bottom:12px}.instruction-navigator-header h2{font-size:13px;margin:0 0 2px}'
+    '.instruction-filter{display:grid;gap:5px;margin:12px 0 10px}.instruction-filter label{font-size:11px;font-weight:600;color:var(--label)}'
+    '.instruction-filter input{height:34px;width:100%;border:1px solid var(--border);border-radius:6px;background:var(--surface);'
+    'color:var(--foreground);padding:0 9px;font:inherit;font-size:13px}.instruction-filter input:focus{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-tree-scroll{max-height:68vh;overflow:auto;padding:2px 3px 8px 0;scrollbar-gutter:stable}'
+    '.instruction-tree,.instruction-tree [role=group]{list-style:none;margin:0;padding:0}.instruction-tree [role=group]{margin-left:13px;padding-left:9px;border-left:1px solid var(--border)}'
+    '.instruction-tree-node{display:flex;align-items:center;gap:6px;width:100%;min-height:31px;border:0;border-radius:5px;background:transparent;'
+    'color:var(--foreground);padding:4px 6px;text-align:left;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}'
+    '.instruction-tree-node:hover{background:var(--row-hover)}.instruction-tree-node:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}'
+    '.instruction-tree-node[aria-selected=true]{background:var(--accent);box-shadow:inset 3px 0 0 var(--ring);font-weight:600}'
+    '.instruction-tree-chevron{position:relative;display:inline-block;width:14px;height:14px;flex:0 0 14px}'
+    '.instruction-tree-chevron::before{content:"";position:absolute;left:3px;top:3px;width:6px;height:6px;border-right:1.5px solid currentColor;'
+    'border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .12s ease}'
+    '.instruction-tree-node[aria-expanded=true] .instruction-tree-chevron::before{transform:rotate(45deg);top:2px}'
+    '.instruction-tree-chevron.empty::before{display:none}.instruction-tree-label{overflow:hidden;text-overflow:ellipsis}'
+    '.instruction-tree-badge{margin-left:auto;border:1px solid var(--border);border-radius:999px;padding:0 5px;color:var(--muted);font-size:9px;'
+    'font-weight:700;letter-spacing:.04em;text-transform:uppercase;line-height:16px}.instruction-tree-badge.warn-badge{color:var(--warn-fg);border-color:var(--warn-border)}'
+    '.instruction-tree-empty{padding:10px 7px;color:var(--muted);font-size:12px}.instruction-workspace{padding:18px 20px}'
+    '.instruction-workspace-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--border);padding-bottom:14px}'
+    '.instruction-workspace-header h2{font-size:18px;margin:0 0 4px}.instruction-tabs{display:flex;gap:3px;flex-wrap:wrap}'
+    '.instruction-tab{border:0;border-radius:5px;background:transparent;color:var(--muted);padding:6px 9px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}'
+    '.instruction-tab:hover{background:var(--surface-hover);color:var(--foreground)}.instruction-tab[aria-selected=true]{background:var(--accent);color:var(--foreground)}'
+    '.instruction-tab:focus-visible{outline:2px solid var(--ring);outline-offset:2px}.instruction-directory-view{padding-top:16px}'
+    '.instruction-panel[hidden],.instruction-directory-view[hidden]{display:none!important}.instruction-source-block{border-top:1px solid var(--border);padding:16px 0}'
+    '.instruction-source-block:first-child{border-top:0;padding-top:0}.instruction-source-heading{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:8px}'
+    '.instruction-source-heading h3{font-size:13px;text-transform:none;color:var(--foreground);margin:0}.instruction-source-meta{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}'
+    '.instruction-source-block pre{margin:0}.instruction-scope{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:700}'
+    '.instruction-order{margin:0;padding-left:25px}.instruction-order li{padding:7px 0;border-bottom:1px solid var(--border)}'
+    '.instruction-order li:last-child{border-bottom:0}.instruction-delta{margin:0;padding:0;list-style:none}.instruction-delta li{padding:8px 0;border-bottom:1px solid var(--border)}'
+    '.instruction-delta li:last-child{border-bottom:0}.instruction-source-library{margin-top:14px}.js .instruction-source-library{display:none}'
     'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
     '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
-    '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}}'
+    '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}'
+    '.instruction-explorer{grid-template-columns:1fr}.instruction-navigator{border-right:0;border-bottom:1px solid var(--border)}'
+    '.instruction-tree-scroll{max-height:300px}.instruction-workspace-header{display:block}.instruction-tabs{margin-top:12px}}'
 )
 
 
@@ -2034,27 +2069,117 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         source["path"]: "instruction-source-" + hashlib.sha256(source["path"].encode("utf-8")).hexdigest()[:12]
         for source in report["sources"]
     }
-    options = "".join(
-        f'<option value="{h(directory["path"])}">{h(directory["path"])}</option>'
-        for directory in report["directories"]
-    )
-    chains = []
-    for index, directory in enumerate(report["directories"]):
+    directories = report["directories"]
+    records_by_path = {directory["path"]: directory for directory in directories}
+    root = report["dir"]
+    children: dict[str, list[str]] = {path: [] for path in records_by_path}
+    for path in records_by_path:
+        if path == root:
+            continue
+        parent = str(PurePosixPath(path).parent)
+        if parent not in children:
+            parent = root
+        children[parent].append(path)
+    for child_paths in children.values():
+        child_paths.sort(key=lambda value: (value.casefold(), value))
+
+    finding_counts: dict[str, int] = {}
+    for finding in report["findings"]:
+        finding_path = finding["path"]
+        directory = finding_path if finding_path in records_by_path else str(PurePosixPath(finding_path).parent)
+        if directory in records_by_path:
+            finding_counts[directory] = finding_counts.get(directory, 0) + 1
+
+    def source_directory(path: str) -> str:
+        return str(PurePosixPath(path).parent)
+
+    def tree_node_open(path: str, level: int) -> str:
+        child_paths = children[path]
+        has_children = bool(child_paths)
+        expanded = path == root
+        local_sources = [
+            source for source in records_by_path[path]["sources"]
+            if source_directory(source["path"]) == path
+        ]
+        badges = ""
+        if local_sources:
+            label = "override" if PurePosixPath(local_sources[-1]["path"]).name == "AGENTS.override.md" else "rules"
+            badges += f'<span class=instruction-tree-badge aria-hidden=true>{label}</span>'
+        if finding_counts.get(path):
+            count = finding_counts[path]
+            label = "issue" if count == 1 else "issues"
+            badges += f'<span class="instruction-tree-badge warn-badge" aria-hidden=true>{count} {label}</span>'
+        expanded_attr = f' aria-expanded="{str(expanded).lower()}"' if has_children else ""
+        label = root if path == root else PurePosixPath(path).name
+        return (
+            '<li role=none>'
+            f'<button type=button class=instruction-tree-node role=treeitem data-tree-node data-instruction-dir="{h(path)}" '
+            f'data-search="{h(path.casefold())}" aria-level="{level}" aria-selected="false" tabindex="-1"{expanded_attr}>'
+            f'<span class="instruction-tree-chevron{"" if has_children else " empty"}" data-tree-toggle aria-hidden=true></span>'
+            f'<span class=instruction-tree-label>{h(label)}</span>{badges}</button>'
+        )
+
+    tree_parts = []
+    stack = [("node", root, 1)] if root in records_by_path else []
+    while stack:
+        action, path, level = stack.pop()
+        if action == "close":
+            tree_parts.append("</ul></li>")
+            continue
+        tree_parts.append(tree_node_open(path, level))
+        child_paths = children[path]
+        if not child_paths:
+            tree_parts.append("</li>")
+            continue
+        tree_parts.append(f'<ul role=group{"" if path == root else " hidden"}>')
+        stack.append(("close", path, level))
+        stack.extend(("node", child, level + 1) for child in reversed(child_paths))
+    tree = "".join(tree_parts)
+    directory_views = []
+    for index, directory in enumerate(directories):
+        path = directory["path"]
+        chain_paths = [source["path"] for source in directory["sources"]]
+        source_id_list = " ".join(source_ids[path] for path in chain_paths)
         links = []
         for position, source in enumerate(directory["sources"], start=1):
             hash_label = source["sha256"][:12] if source["sha256"] else "content omitted"
+            scope = "local" if source_directory(source["path"]) == path else "inherited"
             links.append(
-                f'<li><span class=pill>{position}</span> '
-                f'<a href="#{source_ids[source["path"]]}"><code>{h(source["path"])}</code></a> '
-                f'<span class=muted>sha256 {h(hash_label)}</span></li>'
+                f'<li><span class=instruction-scope>{h(scope)}</span><br>'
+                f'<a data-source-jump href="#{source_ids[source["path"]]}"><code>{h(source["path"])}</code></a> '
+                f'<span class=muted>· {position} · sha256 {h(hash_label)}</span></li>'
             )
+        parent_path = None if path == root else str(PurePosixPath(path).parent)
+        parent_sources = [] if parent_path not in records_by_path else [
+            source["path"] for source in records_by_path[parent_path]["sources"]
+        ]
+        added = [source for source in chain_paths if source not in parent_sources]
+        removed = [source for source in parent_sources if source not in chain_paths]
+        delta_items = [
+            f'<li><span class=instruction-scope>added here</span><br><code>{h(source)}</code></li>' for source in added
+        ] + [
+            f'<li><span class=instruction-scope>no longer selected</span><br><code>{h(source)}</code></li>' for source in removed
+        ]
+        if parent_path is None:
+            delta = '<p class=muted>This is the configured root scope; there is no parent directory in the report.</p>'
+        elif delta_items:
+            delta = '<ul class=instruction-delta>' + "".join(delta_items) + "</ul>"
+        else:
+            delta = f'<p class=muted>Same repository instruction sources as <code>{h(parent_path)}</code>.</p>'
+        panel_key = hashlib.sha256(path.encode("utf-8")).hexdigest()[:10]
+        effective_id = f"instruction-effective-{panel_key}"
+        sources_id = f"instruction-sources-{panel_key}"
+        delta_id = f"instruction-delta-{panel_key}"
         empty = '<p class=muted>No profile source applies to this directory.</p>'
-        chains.append(
-            f'<section class="card instruction-chain" data-instruction-dir="{h(directory["path"])}"'
-            + ("" if index == 0 else " hidden")
-            + "><h2>Source order</h2>"
+        directory_views.append(
+            f'<section class=instruction-directory-view data-instruction-view="{h(path)}" data-source-ids="{h(source_id_list)}"'
+            + ("" if index == 0 else " hidden") + ">"
+            f'<div class=instruction-panel role=tabpanel data-instruction-panel=effective id={effective_id} aria-labelledby=instruction-tab-effective>'
+            f'<div class=instruction-effective>{empty if not links else ""}</div></div>'
+            f'<div class=instruction-panel role=tabpanel data-instruction-panel=sources id={sources_id} aria-labelledby=instruction-tab-sources hidden>'
             + (f'<ol class=instruction-order>{"".join(links)}</ol>' if links else empty)
-            + '<p class=muted>Root sources appear first. This is discovery order, not a semantic conflict analysis.</p></section>'
+            + '<p class=muted>Root sources appear first. This is discovery order, not semantic conflict analysis.</p></div>'
+            f'<div class=instruction-panel role=tabpanel data-instruction-panel=delta id={delta_id} aria-labelledby=instruction-tab-delta hidden>{delta}</div></section>'
         )
     findings = "".join(
         f'<li><code>{h(finding["path"])}</code> — {h(finding["message"])}</li>'
@@ -2068,13 +2193,18 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     previews = []
     for source in report["sources"]:
         digest = source["sha256"] or "unavailable"
+        parent = source_directory(source["path"])
         if source["content"] is None:
             content = '<p class=warn>Content was not published. See the report findings above.</p>'
         else:
             content = f'<pre>{h(source["content"])}</pre>'
+        kind = "override" if PurePosixPath(source["path"]).name == "AGENTS.override.md" else "source"
         previews.append(
-            f'<article class=card id="{source_ids[source["path"]]}"><h2><code>{h(source["path"])}</code></h2>'
-            f'<p class=muted>{source["bytes"]} bytes · sha256 <code>{h(digest)}</code></p>{content}</article>'
+            f'<article class=instruction-source-block id="{source_ids[source["path"]]}" data-instruction-source '
+            f'data-source-directory="{h(parent)}"><div class=instruction-source-heading>'
+            f'<div><span class=instruction-scope data-source-scope>source</span><h3><code>{h(source["path"])}</code></h3></div>'
+            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span></div></div>'
+            f'<p class=muted>sha256 <code>{h(digest)}</code></p>{content}</article>'
         )
     return (
         '<div class=page-heading><div><h1>Repository instruction sources</h1>'
@@ -2085,23 +2215,243 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<div class=warn><strong>This is not the agent runtime prompt.</strong> The hub only maps repository-visible '
         'sources covered by this profile. User, enterprise, skill, plugin, subagent, system-prompt, configured fallback, '
         'and repository-external layers are outside its view.</div>'
-        '<section class=card><div class=control><label for=instruction-directory>Directory</label>'
-        f'<select id=instruction-directory>{options}</select></div></section>'
-        + "".join(chains)
+        '<div class=instruction-explorer>'
+        '<aside class=instruction-navigator><div class=instruction-navigator-header><h2>Directories</h2>'
+        '<p class=muted>Select where the agent starts working.</p></div>'
+        '<div class=instruction-filter><label for=instruction-filter>Filter directories</label>'
+        '<input id=instruction-filter type=search autocomplete=off placeholder="Search by path…"></div>'
+        '<div class=instruction-tree-scroll><nav aria-label="Repository directories">'
+        f'<ul class=instruction-tree role=tree aria-label="Repository directories">{tree}</ul>'
+        '<p class=instruction-tree-empty data-tree-empty hidden>No matching directories.</p></nav></div></aside>'
+        '<section class=instruction-workspace><div class=instruction-workspace-header><div>'
+        f'<h2 data-selected-directory>{h(root)}</h2><p class=muted data-selected-summary role=status>Repository-visible instruction sources</p></div>'
+        '<div class=instruction-tabs role=tablist aria-label="Instruction view">'
+        '<button class=instruction-tab id=instruction-tab-effective type=button role=tab data-instruction-tab=effective aria-selected=true tabindex=0>Effective</button>'
+        '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=false tabindex=-1>Sources</button>'
+        '<button class=instruction-tab id=instruction-tab-delta type=button role=tab data-instruction-tab=delta aria-selected=false tabindex=-1>Changes</button>'
+        '</div></div>' + "".join(directory_views) + '</section></div>'
         + findings_card
-        + '<h2>Sources</h2><p class=muted>Each source is rendered once. Directory chains link back to these previews.</p>'
-        + ("".join(previews) if previews else '<p class=muted>No instruction sources found.</p>')
+        + '<section class=instruction-source-library data-source-library><h2>Sources</h2>'
+        '<p class=muted>Each source is rendered once. Enable JavaScript to browse effective directory chains.</p>'
+        + ("".join(previews) if previews else '<p class=muted>No instruction sources found.</p>') + '</section>'
         + """
 <script>
 (function () {
-  const select = document.getElementById("instruction-directory");
-  const chains = Array.from(document.querySelectorAll("[data-instruction-dir]"));
-  if (!select) return;
-  function showChain() {
-    chains.forEach((chain) => { chain.hidden = chain.dataset.instructionDir !== select.value; });
+  document.documentElement.classList.add("js");
+  const tree = document.querySelector("[role=tree]");
+  const nodes = Array.from(document.querySelectorAll("[data-tree-node]"));
+  const views = Array.from(document.querySelectorAll("[data-instruction-view]"));
+  const tabs = Array.from(document.querySelectorAll("[data-instruction-tab]"));
+  const filter = document.getElementById("instruction-filter");
+  const empty = document.querySelector("[data-tree-empty]");
+  const sourceLibrary = document.querySelector("[data-source-library]");
+  const sourceNodes = Array.from(document.querySelectorAll("[data-instruction-source]"));
+  const sourceById = new Map(sourceNodes.map((source) => [source.id, source]));
+  const viewByPath = new Map(views.map((view) => [view.dataset.instructionView, view]));
+  if (!tree || !nodes.length || !views.length || !sourceLibrary) return;
+
+  let selectedPath = "";
+  let activePanel = "effective";
+  let filtering = false;
+  let expansionSnapshot = new Map();
+
+  function groupFor(node) {
+    return Array.from(node.parentElement.children).find((child) => child.getAttribute("role") === "group") || null;
   }
-  select.addEventListener("change", showChain);
-  showChain();
+
+  function setExpanded(node, expanded) {
+    const group = groupFor(node);
+    if (!group) return;
+    node.setAttribute("aria-expanded", String(expanded));
+    group.hidden = !expanded;
+  }
+
+  function expandAncestors(node) {
+    let group = node.parentElement.parentElement;
+    while (group && group.getAttribute("role") === "group") {
+      const parentNode = Array.from(group.parentElement.children).find((child) => child.matches("[data-tree-node]"));
+      if (parentNode) setExpanded(parentNode, true);
+      group = group.parentElement.parentElement;
+    }
+  }
+
+  function isVisible(node) {
+    let item = node.parentElement;
+    while (item && item !== tree) {
+      if (item.hidden) return false;
+      const group = item.parentElement;
+      if (group && group.getAttribute("role") === "group" && group.hidden) return false;
+      item = group ? group.parentElement : null;
+    }
+    return true;
+  }
+
+  function visibleNodes() {
+    return nodes.filter(isVisible);
+  }
+
+  function focusNode(node, moveFocus = true) {
+    nodes.forEach((candidate) => { candidate.tabIndex = candidate === node ? 0 : -1; });
+    if (moveFocus) node.focus();
+  }
+
+  function setPanel(panel, updateUrl) {
+    activePanel = ["effective", "sources", "delta"].includes(panel) ? panel : "effective";
+    tabs.forEach((tab) => {
+      const active = tab.dataset.instructionTab === activePanel;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
+    const activeView = viewByPath.get(selectedPath);
+    if (activeView) {
+      activeView.querySelectorAll("[data-instruction-panel]").forEach((candidate) => {
+        candidate.hidden = candidate.dataset.instructionPanel !== activePanel;
+      });
+      tabs.forEach((tab) => {
+        const panelElement = activeView.querySelector(`[data-instruction-panel="${tab.dataset.instructionTab}"]`);
+        if (panelElement) tab.setAttribute("aria-controls", panelElement.id);
+      });
+    }
+    if (updateUrl) updateLocation();
+  }
+
+  function renderEffective(view) {
+    sourceNodes.forEach((source) => sourceLibrary.append(source));
+    const target = view.querySelector(".instruction-effective");
+    const ids = view.dataset.sourceIds.split(" ").filter(Boolean);
+    ids.forEach((id) => {
+      const source = sourceById.get(id);
+      if (!source) return;
+      const scope = source.querySelector("[data-source-scope]");
+      if (scope) scope.textContent = source.dataset.sourceDirectory === selectedPath ? "local" : "inherited";
+      target.append(source);
+    });
+  }
+
+  function updateLocation() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("dir", selectedPath);
+    url.searchParams.set("view", activePanel);
+    history.replaceState(null, "", url);
+  }
+
+  function selectDirectory(path, updateUrl) {
+    const view = viewByPath.get(path);
+    const node = nodes.find((candidate) => candidate.dataset.instructionDir === path);
+    if (!view || !node) return;
+    selectedPath = path;
+    nodes.forEach((candidate) => candidate.setAttribute("aria-selected", String(candidate === node)));
+    views.forEach((candidate) => { candidate.hidden = candidate !== view; });
+    expandAncestors(node);
+    document.querySelector("[data-selected-directory]").textContent = path;
+    const count = view.dataset.sourceIds.split(" ").filter(Boolean).length;
+    document.querySelector("[data-selected-summary]").textContent = count === 1 ? "1 applicable source" : `${count} applicable sources`;
+    renderEffective(view);
+    setPanel(activePanel, false);
+    if (updateUrl) updateLocation();
+  }
+
+  function applyFilter() {
+    const query = filter.value.trim().toLocaleLowerCase();
+    if (query && !filtering) {
+      expansionSnapshot = new Map(nodes.map((node) => [node, node.getAttribute("aria-expanded")]));
+      filtering = true;
+    }
+    const items = Array.from(tree.querySelectorAll("li[role=none]"));
+    if (!query) {
+      items.forEach((item) => { item.hidden = false; });
+      if (filtering) {
+        expansionSnapshot.forEach((value, node) => {
+          if (value !== null) setExpanded(node, value === "true");
+        });
+      }
+      filtering = false;
+      empty.hidden = visibleNodes().length > 0;
+      return;
+    }
+    items.slice().reverse().forEach((item) => {
+      const node = Array.from(item.children).find((child) => child.matches("[data-tree-node]"));
+      const group = Array.from(item.children).find((child) => child.getAttribute("role") === "group");
+      const childMatch = group ? Array.from(group.children).some((child) => child.dataset.treeMatch === "true") : false;
+      const ownMatch = node ? node.dataset.search.includes(query) : false;
+      const matched = ownMatch || childMatch;
+      item.dataset.treeMatch = String(matched);
+      item.hidden = !matched;
+      if (group && matched) setExpanded(node, childMatch);
+    });
+    empty.hidden = visibleNodes().length > 0;
+  }
+
+  nodes.forEach((node) => {
+    node.addEventListener("click", (event) => {
+      focusNode(node);
+      if (event.target.closest("[data-tree-toggle]") && node.hasAttribute("aria-expanded")) {
+        setExpanded(node, node.getAttribute("aria-expanded") !== "true");
+        return;
+      }
+      selectDirectory(node.dataset.instructionDir, true);
+    });
+    node.addEventListener("keydown", (event) => {
+      const visible = visibleNodes();
+      const index = visible.indexOf(node);
+      let next = null;
+      if (event.key === "ArrowDown") next = visible[Math.min(index + 1, visible.length - 1)];
+      else if (event.key === "ArrowUp") next = visible[Math.max(index - 1, 0)];
+      else if (event.key === "Home") next = visible[0];
+      else if (event.key === "End") next = visible[visible.length - 1];
+      else if (event.key === "ArrowRight") {
+        if (node.getAttribute("aria-expanded") === "false") setExpanded(node, true);
+        else if (node.getAttribute("aria-expanded") === "true") {
+          const group = groupFor(node);
+          next = group ? group.querySelector("[data-tree-node]") : null;
+        }
+      } else if (event.key === "ArrowLeft") {
+        if (node.getAttribute("aria-expanded") === "true") setExpanded(node, false);
+        else {
+          const group = node.parentElement.parentElement;
+          if (group && group.getAttribute("role") === "group") {
+            next = Array.from(group.parentElement.children).find((child) => child.matches("[data-tree-node]")) || null;
+          }
+        }
+      } else if (event.key === "Enter" || event.key === " ") {
+        selectDirectory(node.dataset.instructionDir, true);
+      } else return;
+      event.preventDefault();
+      if (next) focusNode(next);
+    });
+  });
+
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => setPanel(tab.dataset.instructionTab, true));
+    tab.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const offset = event.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(tabs.indexOf(tab) + offset + tabs.length) % tabs.length];
+      setPanel(next.dataset.instructionTab, true);
+      next.focus();
+      event.preventDefault();
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-source-jump]");
+    if (!link) return;
+    setPanel("effective", true);
+    requestAnimationFrame(() => document.querySelector(link.getAttribute("href"))?.scrollIntoView({ block: "start" }));
+  });
+  filter.addEventListener("input", applyFilter);
+  window.addEventListener("popstate", () => {
+    const params = new URLSearchParams(window.location.search);
+    activePanel = params.get("view") || "effective";
+    selectDirectory(params.get("dir") || nodes[0].dataset.instructionDir, false);
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  activePanel = params.get("view") || "effective";
+  const initialNode = nodes.find((node) => node.dataset.instructionDir === params.get("dir")) || nodes[0];
+  focusNode(initialNode, false);
+  selectDirectory(initialNode.dataset.instructionDir, false);
+  setPanel(activePanel, false);
 })();
 </script>
 """
@@ -3270,6 +3620,18 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert "<script>alert('root')</script>" not in instruction_html
     assert instruction_html.count("root &lt;script&gt;") == 1, "each source preview must render once"
     assert "This is not the agent runtime prompt" in instruction_html
+    assert 'class=instruction-tree role=tree' in instruction_html
+    assert 'data-instruction-dir="src/api"' in instruction_html
+    assert 'aria-level="3"' in instruction_html, "nested directories must expose their tree depth"
+    assert 'data-instruction-tab=effective' in instruction_html
+    assert 'data-instruction-tab=sources' in instruction_html
+    assert 'data-instruction-tab=delta' in instruction_html
+    assert 'id=instruction-filter type=search' in instruction_html
+    assert 'new URLSearchParams(window.location.search)' in instruction_html
+    assert 'event.key === "ArrowRight"' in instruction_html
+    assert 'event.key === "Home"' in instruction_html
+    assert '<select id=instruction-directory>' not in instruction_html
+    assert "src/api/AGENTS.override.md" in instruction_html and "added here" in instruction_html
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",
