@@ -1,6 +1,6 @@
 # Plan: repository instruction explorer and change proposals
 
-Status: phase 1 implemented; phase 2 in progress; phases 3-4 planned
+Status: phases 1-2 implemented; phases 3-4 planned
 Date: 2026-08-21
 Scope: repository-visible agent instructions for one monitored project
 Constraints: the hub stays read-only, Git stays the database, generated pages
@@ -290,7 +290,11 @@ verification remains a release check rather than an implementation claim.
 - detect stale base commit/hash; **implemented through a no-cache comparison
   with the currently published `data/index.json`**
 - support proposed add/delete after single-file editing is verified;
+  **implemented, including shadowed `AGENTS.md` fallback after override
+  deletion**
 - add escaping and adversarial-content tests for every draft-rendering path.
+  **implemented with text-only DOM construction and an end-to-end malicious
+  draft fixture**
 
 ### Phase 3 - portable change proposal
 

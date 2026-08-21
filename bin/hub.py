@@ -526,7 +526,10 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
         nonlocal total_bytes
         if path in source_records:
             return source_records[path]
-        record: dict[str, Any] = {"bytes": entry["size"], "path": path, "sha256": None, "content": None}
+        record: dict[str, Any] = {
+            "bytes": entry["size"], "path": path, "sha256": None, "content": None,
+            "selectable": entry["mode"] != "120000" and entry["size"] > 0,
+        }
         if entry["mode"] == "120000":
             findings.append({
                 "code": "symlink", "path": path,
@@ -572,6 +575,15 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
             if chosen is not None:
                 chain.append({"path": chosen["path"], "sha256": chosen["sha256"]})
         directory_records.append({"path": directory, "sources": chain})
+
+    # Load bounded, repository-visible candidates that are currently shadowed
+    # by an override. The draft preview needs their exact content to show the
+    # deterministic fallback after a proposed deletion. Effective chains above
+    # are loaded first so unused candidates cannot consume their byte budget.
+    for entry in scoped:
+        if PurePosixPath(entry["path"]).name not in {"AGENTS.md", "AGENTS.override.md"}:
+            continue
+        load_source(entry["path"], entry)
 
     if settings["lint_claude_include"]:
         agent_dirs = {
@@ -1636,8 +1648,10 @@ CSS = (
     '.instruction-order{margin:0;padding-left:25px}.instruction-order li{padding:7px 0;border-bottom:1px solid var(--border)}'
     '.instruction-order li:last-child{border-bottom:0}.instruction-delta{margin:0;padding:0;list-style:none}.instruction-delta li{padding:8px 0;border-bottom:1px solid var(--border)}'
     '.instruction-delta li:last-child{border-bottom:0}.instruction-source-library{margin-top:14px}.js .instruction-source-storage{display:none}'
-    '.instruction-edit-button{display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:5px 8px;font:inherit;font-size:11px;font-weight:650;cursor:pointer}.js .instruction-edit-button{display:inline-block}'
-    '.instruction-edit-button:hover{background:var(--surface-hover)}.instruction-edit-button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-edit-button,.instruction-delete-button,.instruction-add-button{display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:5px 8px;font:inherit;font-size:11px;font-weight:650;cursor:pointer}'
+    '.js .instruction-edit-button,.js .instruction-delete-button,.js .instruction-add-button{display:inline-block}.js .instruction-add-button[hidden]{display:none}'
+    '.instruction-edit-button:hover,.instruction-delete-button:hover,.instruction-add-button:hover{background:var(--surface-hover)}.instruction-edit-button:focus-visible,.instruction-delete-button:focus-visible,.instruction-add-button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-delete-button{color:var(--warn-fg);border-color:var(--warn-border)}'
     '.instruction-source-block.is-drafted{box-shadow:inset 3px 0 0 var(--ring);padding-left:12px}.instruction-draft{margin-top:14px;border-top:1px solid var(--border);padding-top:18px}'
     '.instruction-draft[hidden]{display:none}.instruction-draft-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.instruction-draft-header h2{margin:0 0 4px;font-size:17px}'
     '.instruction-draft-actions{display:flex;gap:7px;flex-wrap:wrap}.instruction-draft-actions button{border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:6px 9px;font:inherit;font-size:12px;font-weight:650;cursor:pointer}'
@@ -2089,6 +2103,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         for directory in directories
         for source in directory["sources"]
     }
+    sources_by_path = {source["path"]: source for source in report["sources"]}
     records_by_path = {directory["path"]: directory for directory in directories}
     root = report["dir"]
     children: dict[str, list[str]] = {path: [] for path in records_by_path}
@@ -2223,17 +2238,27 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         kind = "override" if PurePosixPath(source["path"]).name == "AGENTS.override.md" else "source"
         mapped = source["path"] in mapped_source_paths
         edit_button = ""
+        delete_button = ""
         if source["content"] is not None and mapped:
             edit_button = (
                 f'<button type=button class=instruction-edit-button data-edit-source '
                 f'aria-label="Edit {h(source["path"])}">Edit draft</button>'
             )
+            fallback = None
+            if PurePosixPath(source["path"]).name == "AGENTS.override.md":
+                fallback = sources_by_path.get(str(PurePosixPath(source["path"]).with_name("AGENTS.md")))
+            if fallback is None or not fallback["selectable"] or fallback["content"] is not None:
+                delete_button = (
+                    f'<button type=button class=instruction-delete-button data-delete-source '
+                    f'aria-label="Propose deleting {h(source["path"])}">Delete draft</button>'
+                )
         preview = (
             f'<article class=instruction-source-block id="{source_ids[source["path"]]}" data-instruction-source '
             f'data-source-path="{h(source["path"])}" data-source-hash="{h(digest)}" '
-            f'data-source-directory="{h(parent)}" data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
+            f'data-source-directory="{h(parent)}" data-source-selectable="{str(source["selectable"]).lower()}" '
+            f'data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
             f'<div><span class=instruction-scope data-source-scope>source</span><h3><code>{h(source["path"])}</code></h3></div>'
-            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span>{edit_button}</div></div>'
+            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span>{edit_button}{delete_button}</div></div>'
             f'<p class=muted>sha256 <code>{h(digest)}</code></p>{content}</article>'
         )
         (mapped_previews if mapped else orphan_previews).append(preview)
@@ -2256,18 +2281,19 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<p class=instruction-tree-empty data-tree-empty hidden>No matching directories.</p></nav></div></aside>'
         '<section class=instruction-workspace><div class=instruction-workspace-header><div>'
         f'<h2 data-selected-directory>{h(root)}</h2><p class=muted data-selected-summary role=status>Repository-visible instruction sources</p></div>'
+        '<div><button type=button class=instruction-add-button data-add-source hidden>Add AGENTS.md here</button>'
         '<div class=instruction-tabs role=tablist aria-label="Instruction view">'
         '<button class=instruction-tab id=instruction-tab-effective type=button role=tab data-instruction-tab=effective aria-selected=false tabindex=-1>Effective</button>'
         '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=true tabindex=0>Sources</button>'
         '<button class=instruction-tab id=instruction-tab-delta type=button role=tab data-instruction-tab=delta aria-selected=false tabindex=-1>Changes</button>'
-        '</div></div>' + "".join(directory_views) + '</section></div>'
+        '</div></div></div>' + "".join(directory_views) + '</section></div>'
         + f'<section class=instruction-draft data-instruction-draft data-base-commit="{h(commit)}" hidden>'
-        '<div class=instruction-draft-header><div><h2>Local draft</h2>'
+        '<div class=instruction-draft-header><div><h2 data-draft-title>Local draft</h2>'
         '<p class=muted>Edit one concrete source in page memory. Nothing is saved to the repository.</p></div>'
         '<div class=instruction-draft-actions><button type=button data-discard-draft>Discard draft</button></div></div>'
         '<div class="warn instruction-stale-draft" data-stale-draft role=alert hidden><strong>Stale base.</strong> '
         'The published commit or source hash changed. Discard this draft and review the current source before continuing.</div>'
-        '<div class=instruction-draft-grid><div><label class=instruction-editor-label>Source content'
+        '<div class=instruction-draft-grid><div><label class=instruction-editor-label><span data-editor-label>Source content</span>'
         '<textarea class=instruction-editor data-draft-editor spellcheck=false></textarea></label>'
         '<p class="muted instruction-draft-status" data-draft-status role=status></p></div>'
         '<aside class=instruction-impact aria-label="Draft impact"><h3>Deterministic impact</h3>'
@@ -2308,6 +2334,9 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   const affectedCount = document.querySelector("[data-affected-count]");
   const affectedList = document.querySelector("[data-affected-directories]");
   const staleDraft = document.querySelector("[data-stale-draft]");
+  const addSourceButton = document.querySelector("[data-add-source]");
+  const draftTitle = document.querySelector("[data-draft-title]");
+  const editorLabel = document.querySelector("[data-editor-label]");
   if (!tree || !nodes.length || !views.length || !sourceLibrary || !sourceStorage || !orphanContainer) return;
 
   let selectedPath = "";
@@ -2315,9 +2344,12 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   let filtering = false;
   let expansionSnapshot = new Map();
   let draftedSource = null;
+  let draftOperation = "edit";
   let originalContent = "";
   let draftDirty = false;
   let draftAffectedViews = [];
+  let virtualSource = null;
+  views.forEach((view) => { view.dataset.baseSourceIds = view.dataset.sourceIds; });
   const orphanSources = sourceNodes.filter((source) => source.dataset.sourceMapped !== "true");
   sourceLibrary.hidden = orphanSources.length === 0;
   if (orphanSources.length) {
@@ -2419,13 +2451,92 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     });
   }
 
+  function sourceDirectory(path) {
+    const parts = path.split("/");
+    parts.pop();
+    return parts.join("/") || ".";
+  }
+
+  function sourceFilename(path) {
+    return path.split("/").pop();
+  }
+
+  function isInstructionCandidate(source) {
+    return ["AGENTS.md", "AGENTS.override.md"].includes(sourceFilename(source.dataset.sourcePath));
+  }
+
+  function localCandidates(path) {
+    return sourceNodes.filter((source) => source !== virtualSource && isInstructionCandidate(source) &&
+      source.dataset.sourceDirectory === path);
+  }
+
+  function updateAddSourceAction() {
+    if (!addSourceButton) return;
+    addSourceButton.hidden = Boolean(draftedSource) || localCandidates(selectedPath).length > 0;
+  }
+
+  function restoreBaseChains() {
+    views.forEach((view) => { view.dataset.sourceIds = view.dataset.baseSourceIds; });
+  }
+
+  function fallbackFor(source) {
+    if (sourceFilename(source.dataset.sourcePath) !== "AGENTS.override.md") return null;
+    const fallbackPath = source.dataset.sourceDirectory === "."
+      ? "AGENTS.md" : `${source.dataset.sourceDirectory}/AGENTS.md`;
+    return sourceNodes.find((candidate) => candidate !== source && candidate.dataset.sourcePath === fallbackPath &&
+      candidate.dataset.sourceSelectable === "true") || null;
+  }
+
+  function applyDraftOverlay() {
+    restoreBaseChains();
+    if (!draftedSource) {
+      draftAffectedViews = [];
+      return;
+    }
+    if (draftOperation === "edit") {
+      draftAffectedViews = views.filter((view) => view.dataset.baseSourceIds.split(" ").includes(draftedSource.id));
+      return;
+    }
+    if (draftOperation === "create") {
+      if (!draftEditor.value.length) {
+        draftAffectedViews = [];
+        return;
+      }
+      const directory = draftedSource.dataset.sourceDirectory;
+      draftAffectedViews = views.filter((view) => view.dataset.instructionView === directory ||
+        view.dataset.instructionView.startsWith(directory === "." ? "" : directory + "/"));
+      const targetDepth = directory === "." ? 0 : directory.split("/").length;
+      draftAffectedViews.forEach((view) => {
+        const ids = view.dataset.baseSourceIds.split(" ").filter(Boolean);
+        const insertion = ids.findIndex((id) => {
+          const source = sourceById.get(id);
+          const sourceDir = source?.dataset.sourceDirectory || ".";
+          const depth = sourceDir === "." ? 0 : sourceDir.split("/").length;
+          return depth > targetDepth;
+        });
+        ids.splice(insertion < 0 ? ids.length : insertion, 0, draftedSource.id);
+        view.dataset.sourceIds = ids.join(" ");
+      });
+      return;
+    }
+    const fallback = fallbackFor(draftedSource);
+    draftAffectedViews = views.filter((view) => view.dataset.baseSourceIds.split(" ").includes(draftedSource.id));
+    draftAffectedViews.forEach((view) => {
+      const ids = view.dataset.baseSourceIds.split(" ").filter(Boolean);
+      const index = ids.indexOf(draftedSource.id);
+      if (fallback) ids.splice(index, 1, fallback.id);
+      else ids.splice(index, 1);
+      view.dataset.sourceIds = ids.join(" ");
+    });
+  }
+
   function sourceText(source, useDraft) {
     if (useDraft && source === draftedSource) return draftEditor.value;
     return source.querySelector("pre")?.textContent || "";
   }
 
-  function effectiveText(view, useDraft) {
-    const ids = view.dataset.sourceIds.split(" ").filter(Boolean);
+  function effectiveText(view, useDraft, useBase) {
+    const ids = (useBase ? view.dataset.baseSourceIds : view.dataset.sourceIds).split(" ").filter(Boolean);
     return ids.map((id) => {
       const source = sourceById.get(id);
       if (!source) return "";
@@ -2469,32 +2580,43 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
 
   function updateDraftPreview() {
     if (!draftedSource) return;
-    draftDirty = draftEditor.value !== originalContent;
+    draftDirty = draftOperation !== "edit" || draftEditor.value !== originalContent;
+    applyDraftOverlay();
     draftedSource.classList.toggle("is-drafted", draftDirty);
     let pill = draftedSource.querySelector("[data-draft-pill]");
     if (draftDirty && !pill) {
       pill = document.createElement("span");
       pill.className = "pill draft-pill";
       pill.dataset.draftPill = "";
-      pill.textContent = "draft";
+      pill.textContent = draftOperation === "create" ? "new" : (draftOperation === "delete" ? "delete" : "draft");
       draftedSource.querySelector(".instruction-source-meta")?.prepend(pill);
     } else if (!draftDirty && pill) pill.remove();
-    draftStatus.textContent = draftDirty ? "Unsaved local draft · stored only in this page" : "Draft matches the published source.";
-    renderDiff(originalContent, draftEditor.value, sourceDiff);
     const activeView = viewByPath.get(selectedPath);
-    const appliesHere = activeView && activeView.dataset.sourceIds.split(" ").includes(draftedSource.id);
+    if (draftOperation === "create") {
+      draftStatus.textContent = draftEditor.value.length
+        ? "Proposed addition · stored only in this page" : "Add content to make the proposed source applicable.";
+      draftedSource.querySelector("pre").textContent = draftEditor.value;
+      if (activeView) renderEffective(activeView);
+    } else if (draftOperation === "delete") {
+      draftStatus.textContent = "Proposed deletion · stored only in this page";
+    } else {
+      draftStatus.textContent = draftDirty ? "Unsaved local draft · stored only in this page" : "Draft matches the published source.";
+    }
+    renderDiff(originalContent, draftEditor.value, sourceDiff);
+    const appliesHere = activeView && draftAffectedViews.includes(activeView);
     selectedImpact.textContent = appliesHere
       ? `Changes the effective repository instructions for ${selectedPath}.`
       : `Does not change the effective repository instructions for ${selectedPath}.`;
     renderDiff(
-      activeView ? effectiveText(activeView, false) : "",
-      activeView && appliesHere ? effectiveText(activeView, true) : (activeView ? effectiveText(activeView, false) : ""),
+      activeView ? effectiveText(activeView, false, true) : "",
+      activeView ? effectiveText(activeView, true, false) : "",
       effectiveDiff
     );
     const affected = affectedViews();
     affectedCount.textContent = affected.length === 1 ? "1 directory" : `${affected.length} directories`;
-    if (affectedList.dataset.sourceId !== draftedSource.id) {
-      affectedList.dataset.sourceId = draftedSource.id;
+    const affectedKey = `${draftOperation}:${draftedSource.id}:${draftAffectedViews.length}`;
+    if (affectedList.dataset.sourceId !== affectedKey) {
+      affectedList.dataset.sourceId = affectedKey;
       affectedList.replaceChildren();
       affected.forEach((view) => {
         const item = document.createElement("li");
@@ -2511,8 +2633,10 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
       if (!response.ok) return;
       const current = await response.json();
       const currentSource = current.instructions?.sources?.find((source) => source.path === draftedSource.dataset.sourcePath);
-      const mismatched = current.commit !== draftPanel.dataset.baseCommit ||
-        !currentSource || currentSource.sha256 !== draftedSource.dataset.sourceHash;
+      const sourceMismatch = draftOperation === "create"
+        ? Boolean(currentSource)
+        : !currentSource || currentSource.sha256 !== draftedSource.dataset.sourceHash;
+      const mismatched = current.commit !== draftPanel.dataset.baseCommit || sourceMismatch;
       staleDraft.hidden = !mismatched;
     } catch (_error) {
       // Offline and file:// views remain editable; provenance stays visible in the page.
@@ -2522,9 +2646,18 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   function discardDraft(askFirst) {
     if (!draftedSource) return true;
     if (askFirst && draftDirty && !window.confirm("Discard the unsaved local instruction draft?")) return false;
+    restoreBaseChains();
     draftedSource.classList.remove("is-drafted");
     draftedSource.querySelector("[data-draft-pill]")?.remove();
+    if (virtualSource) {
+      sourceById.delete(virtualSource.id);
+      const index = sourceNodes.indexOf(virtualSource);
+      if (index >= 0) sourceNodes.splice(index, 1);
+      virtualSource.remove();
+      virtualSource = null;
+    }
     draftedSource = null;
+    draftOperation = "edit";
     originalContent = "";
     draftDirty = false;
     draftAffectedViews = [];
@@ -2532,25 +2665,84 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     draftEditor.value = "";
     draftPanel.hidden = true;
     staleDraft.hidden = true;
+    draftEditor.readOnly = false;
+    const activeView = viewByPath.get(selectedPath);
+    if (activeView) renderEffective(activeView);
+    updateAddSourceAction();
     return true;
   }
 
-  function startDraft(source) {
-    if (draftedSource === source) {
+  function configureDraft(source, operation) {
+    draftedSource = source;
+    draftOperation = operation;
+    originalContent = operation === "create" ? "" : (source.querySelector("pre")?.textContent || "");
+    draftEditor.value = operation === "delete" ? "" : originalContent;
+    draftEditor.readOnly = operation === "delete";
+    draftTitle.textContent = operation === "create" ? "Proposed source addition" :
+      (operation === "delete" ? "Proposed source deletion" : "Local draft");
+    editorLabel.textContent = operation === "delete" ? "Source content after deletion" : "Source content";
+    draftPanel.hidden = false;
+    updateAddSourceAction();
+    updateDraftPreview();
+    const activeView = viewByPath.get(selectedPath);
+    if (activeView) renderEffective(activeView);
+    checkDraftBase();
+    draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    draftEditor.focus();
+  }
+
+  function startDraft(source, operation) {
+    if (draftedSource === source && draftOperation === operation) {
       draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
       draftEditor.focus();
       return;
     }
     if (!discardDraft(true)) return;
-    draftedSource = source;
-    draftAffectedViews = views.filter((view) => view.dataset.sourceIds.split(" ").includes(source.id));
-    originalContent = source.querySelector("pre")?.textContent || "";
-    draftEditor.value = originalContent;
-    draftPanel.hidden = false;
-    updateDraftPreview();
-    checkDraftBase();
-    draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-    draftEditor.focus();
+    configureDraft(source, operation);
+  }
+
+  function makeVirtualSource(path) {
+    const source = document.createElement("article");
+    source.className = "instruction-source-block";
+    source.id = "instruction-source-local-addition";
+    source.dataset.instructionSource = "";
+    source.dataset.sourcePath = path;
+    source.dataset.sourceHash = "missing";
+    source.dataset.sourceDirectory = sourceDirectory(path);
+    source.dataset.sourceSelectable = "true";
+    source.dataset.sourceMapped = "true";
+    const heading = document.createElement("div");
+    heading.className = "instruction-source-heading";
+    const identity = document.createElement("div");
+    const scope = document.createElement("span");
+    scope.className = "instruction-scope";
+    scope.dataset.sourceScope = "";
+    scope.textContent = "proposed";
+    const title = document.createElement("h3");
+    const code = document.createElement("code");
+    code.textContent = path;
+    title.append(code);
+    identity.append(scope, title);
+    const meta = document.createElement("div");
+    meta.className = "instruction-source-meta";
+    const kind = document.createElement("span");
+    kind.className = "pill";
+    kind.textContent = "new source";
+    meta.append(kind);
+    heading.append(identity, meta);
+    const content = document.createElement("pre");
+    source.append(heading, content);
+    sourceStorage.append(source);
+    sourceNodes.push(source);
+    sourceById.set(source.id, source);
+    return source;
+  }
+
+  function startCreateDraft() {
+    if (!discardDraft(true)) return;
+    const path = selectedPath === "." ? "AGENTS.md" : `${selectedPath}/AGENTS.md`;
+    virtualSource = makeVirtualSource(path);
+    configureDraft(virtualSource, "create");
   }
 
   function updateLocation() {
@@ -2574,6 +2766,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     renderEffective(view);
     setPanel(activePanel, false);
     if (draftedSource) updateDraftPreview();
+    updateAddSourceAction();
     if (updateUrl) updateLocation();
   }
 
@@ -2665,7 +2858,13 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     const edit = event.target.closest("[data-edit-source]");
     if (edit) {
       const source = edit.closest("[data-instruction-source]");
-      if (source) startDraft(source);
+      if (source) startDraft(source, "edit");
+      return;
+    }
+    const deletion = event.target.closest("[data-delete-source]");
+    if (deletion) {
+      const source = deletion.closest("[data-instruction-source]");
+      if (source) startDraft(source, "delete");
       return;
     }
     const link = event.target.closest("[data-source-jump]");
@@ -2673,6 +2872,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     setPanel("effective", true);
     requestAnimationFrame(() => document.querySelector(link.getAttribute("href"))?.scrollIntoView({ block: "start" }));
   });
+  addSourceButton?.addEventListener("click", startCreateDraft);
   draftEditor?.addEventListener("input", updateDraftPreview);
   document.querySelector("[data-discard-draft]")?.addEventListener("click", () => discardDraft(true));
   window.addEventListener("beforeunload", (event) => {
@@ -3876,7 +4076,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert 'event.key === "Home"' in instruction_html
     assert '<select id=instruction-directory>' not in instruction_html
     assert "src/api/AGENTS.override.md" in instruction_html and "added here" in instruction_html
-    assert instruction_html.count('data-source-mapped="false"') == 3, (
+    assert instruction_html.count('data-source-mapped="false"') == 4, (
         "lint and omitted sources outside every effective chain must remain identifiable"
     )
     assert '.js .instruction-source-storage{display:none}' in CSS
@@ -3898,6 +4098,11 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert instruction_html.count("class=instruction-edit-button data-edit-source") == 4, (
         "only published sources used by an effective chain must be locally editable"
     )
+    assert instruction_html.count("class=instruction-delete-button data-delete-source") == 4
+    assert "src/api/AGENTS.md" in {source["path"] for source in instruction_report["sources"]}, (
+        "shadowed candidates must be available for deterministic deletion fallback previews"
+    )
+    assert "data-add-source hidden>Add AGENTS.md here" in instruction_html
     assert 'data-base-commit="abcdef123456"' in instruction_html
     assert "Edit one concrete source in page memory" in instruction_html
     assert 'data-source-path="src/api/AGENTS.override.md"' in instruction_html
@@ -3910,6 +4115,13 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert "innerHTML" not in instruction_html, "draft and explorer paths must not inject HTML"
     assert "function affectedViews()" in instruction_html
     assert "currentSource.sha256 !== draftedSource.dataset.sourceHash" in instruction_html
+    assert 'draftOperation === "create"' in instruction_html
+    assert "function applyDraftOverlay()" in instruction_html
+    assert "function fallbackFor(source)" in instruction_html
+    assert "function startCreateDraft()" in instruction_html
+    assert "source.dataset.sourcePath = path;" in instruction_html
+    assert 'code.textContent = path;' in instruction_html
+    assert 'draftedSource.querySelector("pre").textContent = draftEditor.value;' in instruction_html
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",
@@ -3934,6 +4146,30 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "instructions_max_total_bytes": 4,
     }))
     assert any(finding["code"] == "total-bytes-limit" for finding in total_limited_report["findings"])
+    zero_candidate_report = instruction_sources_report(_InstructionMemorySource({
+        "empty/AGENTS.md": "",
+        "empty/main.py": "pass",
+    }), instructions_settings({"instructions_dir": "."}))
+    zero_candidate = next(
+        source for source in zero_candidate_report["sources"] if source["path"] == "empty/AGENTS.md"
+    )
+    assert zero_candidate["content"] == "" and not zero_candidate["selectable"], (
+        "an existing empty candidate must prevent a duplicate create proposal without entering a chain"
+    )
+    omitted_fallback_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "fall",
+        "AGENTS.override.md": "over",
+    }), instructions_settings({
+        "instructions_dir": ".",
+        "instructions_max_file_bytes": 4,
+        "instructions_max_total_bytes": 4,
+    }))
+    omitted_fallback_html = instruction_sources_body(
+        omitted_fallback_report, {"backlog_ref": "main"}, "abcdef123456"
+    )
+    assert 'aria-label="Propose deleting AGENTS.override.md"' not in omitted_fallback_html, (
+        "deletion must be unavailable when a selectable fallback exists but its content was not published"
+    )
     for unsafe_dir in ("../private", "/absolute", "docs/../private", "docs\\private"):
         try:
             instructions_settings({"instructions_dir": unsafe_dir})

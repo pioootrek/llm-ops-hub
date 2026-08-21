@@ -229,14 +229,21 @@ source previews are emitted once and moved into the selected effective view in
 the browser. `data/index.json` contains ordered paths, provenance hashes, limit
 findings, and no instruction text.
 
-An editable source can be opened as a single-file local draft. Draft text stays
-in page memory and is never sent to the hub or written to the monitored
-repository. The browser shows a line diff, the effective-instruction diff for
-the selected directory, and every mapped directory whose chain uses that
-source. It also compares the draft's base commit and source hash with the
-current `data/index.json` when possible, warns if the published release changed,
-and warns before leaving with unsaved text. Reloading or discarding loses the
-draft. Creating/deleting sources and exporting a patch remain follow-on work.
+A source can be edited or proposed for deletion as a single-file local draft;
+when the selected directory has no local instruction candidate, a new
+`AGENTS.md` can be proposed there. Draft text stays in page memory and is never
+sent to the hub or written to the monitored repository. The browser shows a
+line diff, the effective-instruction diff for the selected directory, and every
+mapped directory affected by the operation. Deleting an override previews a
+bounded, published `AGENTS.md` fallback when one exists. Shadowed candidates are
+therefore included in the HTML report once, but instruction text remains absent
+from `data/index.json`.
+
+The editor compares the draft's base commit and source hash (or the expected
+absence of a newly proposed path) with the current `data/index.json` when
+possible, warns if the published release changed, and warns before leaving with
+an unsaved operation. Reloading or discarding loses the draft. Exporting a patch
+remains follow-on work.
 
 ## Human feedback
 
