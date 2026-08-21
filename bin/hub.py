@@ -526,7 +526,12 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
         nonlocal total_bytes
         if path in source_records:
             return source_records[path]
-        record: dict[str, Any] = {"bytes": entry["size"], "path": path, "sha256": None, "content": None}
+        record: dict[str, Any] = {
+            "bytes": entry["size"], "path": path, "sha256": None, "content": None,
+            "editable": False,
+            "line_ending": "lf",
+            "selectable": entry["mode"] != "120000" and entry["size"] > 0,
+        }
         if entry["mode"] == "120000":
             findings.append({
                 "code": "symlink", "path": path,
@@ -547,7 +552,31 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
             total_bytes += len(data)
             record["bytes"] = len(data)
             record["sha256"] = hashlib.sha256(data).hexdigest()
-            record["content"] = data.decode("utf-8", errors="replace")
+            try:
+                record["content"] = data.decode("utf-8")
+                record["editable"] = True
+                without_crlf = record["content"].replace("\r\n", "")
+                styles = [
+                    style for style, present in [
+                        ("crlf", "\r\n" in record["content"]),
+                        ("cr", "\r" in without_crlf),
+                        ("lf", "\n" in without_crlf),
+                    ] if present
+                ]
+                if len(styles) > 1:
+                    record["editable"] = False
+                    findings.append({
+                        "code": "mixed-line-endings", "path": path,
+                        "message": "Source mixes line-ending styles; draft actions are disabled to avoid normalization.",
+                    })
+                elif styles:
+                    record["line_ending"] = styles[0]
+            except UnicodeDecodeError:
+                record["content"] = data.decode("utf-8", errors="replace")
+                findings.append({
+                    "code": "invalid-utf8", "path": path,
+                    "message": "Source is not valid UTF-8; preview is lossy and draft actions are disabled.",
+                })
         source_records[path] = record
         return record
 
@@ -596,10 +625,19 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
                     "message": "Optional convention lint: expected the file to contain only @AGENTS.md.",
                 })
 
+    # Load bounded, repository-visible candidates that are currently shadowed
+    # by an override. Effective chains and lint sources go first so preview-only
+    # candidates can use only the remaining shared byte budget.
+    for entry in scoped:
+        if PurePosixPath(entry["path"]).name not in {"AGENTS.md", "AGENTS.override.md"}:
+            continue
+        load_source(entry["path"], entry)
+
     return {
         "profile": INSTRUCTIONS_PROFILE,
         "profile_as_of": INSTRUCTIONS_PROFILE_AS_OF,
         "dir": root,
+        "max_file_bytes": settings["max_file_bytes"],
         "directories": directory_records,
         "findings": findings,
         "sources": [source_records[path] for path in sorted(source_records)],
@@ -611,6 +649,7 @@ def instruction_sources_json(report: dict[str, Any]) -> dict[str, Any]:
         "profile": report["profile"],
         "profile_as_of": report["profile_as_of"],
         "dir": report["dir"],
+        "max_file_bytes": report["max_file_bytes"],
         "directories": report["directories"],
         "findings": report["findings"],
         "sources": [
@@ -1389,6 +1428,16 @@ def h(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+def pre_text_html(value: str) -> str:
+    """Escape exact text for an HTML <pre> round-trip through textContent.
+
+    HTML parsers discard one leading LF directly after a <pre> start tag and
+    normalize literal CR/CRLF. A character-reference sentinel absorbs the
+    first rule; CR references survive the second.
+    """
+    return "&#10;" + h(value).replace("\r", "&#13;")
+
+
 def paragraphs(values: list[str]) -> str:
     return "".join(f"<p>{h(p)}</p>" for p in values)
 
@@ -1636,12 +1685,31 @@ CSS = (
     '.instruction-order{margin:0;padding-left:25px}.instruction-order li{padding:7px 0;border-bottom:1px solid var(--border)}'
     '.instruction-order li:last-child{border-bottom:0}.instruction-delta{margin:0;padding:0;list-style:none}.instruction-delta li{padding:8px 0;border-bottom:1px solid var(--border)}'
     '.instruction-delta li:last-child{border-bottom:0}.instruction-source-library{margin-top:14px}.js .instruction-source-storage{display:none}'
+    '.instruction-edit-button,.instruction-delete-button,.instruction-add-button{display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:5px 8px;font:inherit;font-size:11px;font-weight:650;cursor:pointer}'
+    '.js .instruction-edit-button,.js .instruction-delete-button,.js .instruction-add-button{display:inline-block}.js .instruction-add-button[hidden]{display:none}'
+    '.instruction-edit-button:hover,.instruction-delete-button:hover,.instruction-add-button:hover{background:var(--surface-hover)}.instruction-edit-button:focus-visible,.instruction-delete-button:focus-visible,.instruction-add-button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-delete-button{color:var(--warn-fg);border-color:var(--warn-border)}'
+    '.instruction-source-block.is-drafted{box-shadow:inset 3px 0 0 var(--ring);padding-left:12px}.instruction-draft{margin-top:14px;border-top:1px solid var(--border);padding-top:18px}'
+    '.instruction-draft[hidden]{display:none}.instruction-draft-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.instruction-draft-header h2{margin:0 0 4px;font-size:17px}'
+    '.instruction-draft-actions{display:flex;gap:7px;flex-wrap:wrap}.instruction-draft-actions button{border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:6px 9px;font:inherit;font-size:12px;font-weight:650;cursor:pointer}'
+    '.instruction-draft-actions button:hover{background:var(--surface-hover)}.instruction-draft-actions button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-draft-actions button:disabled{opacity:.45;cursor:not-allowed;background:var(--surface)}'
+    '.instruction-draft-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.42fr);gap:18px;margin-top:14px}.instruction-editor-label{display:grid;gap:6px;font-size:11px;font-weight:650;color:var(--label)}'
+    '.instruction-editor{width:100%;min-height:330px;resize:vertical;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--foreground);padding:12px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}'
+    '.instruction-editor:focus{outline:2px solid var(--ring);outline-offset:2px}.instruction-impact{border-left:1px solid var(--border);padding-left:18px}.instruction-impact h3{margin-top:0}'
+    '.instruction-affected{max-height:190px;overflow:auto;margin:6px 0 0;padding-left:22px}.instruction-diff{margin-top:16px}.instruction-diff pre{max-height:360px;margin:6px 0 0;white-space:pre-wrap}'
+    '.instruction-diff-line{display:block;min-height:1.55em}.instruction-diff-add{background:color-mix(in srgb,#238636 18%,transparent);color:var(--foreground)}.instruction-diff-remove{background:color-mix(in srgb,#da3633 16%,transparent);color:var(--foreground)}'
+    '.instruction-draft-status{margin:8px 0 0}.instruction-stale-draft{margin-top:12px}.instruction-source-meta .draft-pill{color:var(--warn-fg);border-color:var(--warn-border)}'
+    '.instruction-patch{margin-top:18px;border-top:1px solid var(--border);padding-top:16px}.instruction-patch-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}'
+    '.instruction-patch-header h3{margin:0 0 4px}.instruction-patch pre{max-height:420px;margin:10px 0 0;white-space:pre;overflow:auto}.instruction-export-status{min-height:1.4em;margin:7px 0 0}'
     'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
     '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
     '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}'
     '.instruction-explorer{grid-template-columns:1fr}.instruction-navigator{border-right:0;border-bottom:1px solid var(--border)}'
-    '.instruction-tree-scroll{max-height:300px}.instruction-workspace-header{display:block}.instruction-tabs{margin-top:12px}}'
+    '.instruction-tree-scroll{max-height:300px}.instruction-workspace-header{display:block}.instruction-tabs{margin-top:12px}.instruction-draft-grid{grid-template-columns:1fr}.instruction-impact{border-left:0;border-top:1px solid var(--border);padding:14px 0 0}}'
+    '@media(prefers-reduced-motion:no-preference){.instruction-draft:not([hidden]){animation:instruction-draft-in .16s ease-out}.instruction-source-block{transition:box-shadow .15s ease,padding-left .15s ease}}'
+    '@keyframes instruction-draft-in{from{opacity:.4;transform:translateY(-4px)}to{opacity:1;transform:none}}'
 )
 
 
@@ -2075,6 +2143,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         for directory in directories
         for source in directory["sources"]
     }
+    sources_by_path = {source["path"]: source for source in report["sources"]}
     records_by_path = {directory["path"]: directory for directory in directories}
     root = report["dir"]
     children: dict[str, list[str]] = {path: [] for path in records_by_path}
@@ -2205,14 +2274,33 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         if source["content"] is None:
             content = '<p class=warn>Content was not published. See the report findings above.</p>'
         else:
-            content = f'<pre>{h(source["content"])}</pre>'
+            content = f'<pre>{pre_text_html(source["content"])}</pre>'
         kind = "override" if PurePosixPath(source["path"]).name == "AGENTS.override.md" else "source"
         mapped = source["path"] in mapped_source_paths
+        edit_button = ""
+        delete_button = ""
+        if source["editable"] and mapped:
+            edit_button = (
+                f'<button type=button class=instruction-edit-button data-edit-source '
+                f'aria-label="Edit {h(source["path"])}">Edit draft</button>'
+            )
+            fallback = None
+            if PurePosixPath(source["path"]).name == "AGENTS.override.md":
+                fallback = sources_by_path.get(str(PurePosixPath(source["path"]).with_name("AGENTS.md")))
+            if fallback is None or not fallback["selectable"] or fallback["editable"]:
+                delete_button = (
+                    f'<button type=button class=instruction-delete-button data-delete-source '
+                    f'aria-label="Propose deleting {h(source["path"])}">Delete draft</button>'
+                )
         preview = (
             f'<article class=instruction-source-block id="{source_ids[source["path"]]}" data-instruction-source '
-            f'data-source-directory="{h(parent)}" data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
+            f'data-source-path="{h(source["path"])}" data-source-hash="{h(digest)}" '
+            f'data-source-directory="{h(parent)}" data-source-selectable="{str(source["selectable"]).lower()}" '
+            f'data-source-editable="{str(source["editable"]).lower()}" '
+            f'data-source-line-ending="{source["line_ending"]}" '
+            f'data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
             f'<div><span class=instruction-scope data-source-scope>source</span><h3><code>{h(source["path"])}</code></h3></div>'
-            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span></div></div>'
+            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span>{edit_button}{delete_button}</div></div>'
             f'<p class=muted>sha256 <code>{h(digest)}</code></p>{content}</article>'
         )
         (mapped_previews if mapped else orphan_previews).append(preview)
@@ -2235,11 +2323,33 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<p class=instruction-tree-empty data-tree-empty hidden>No matching directories.</p></nav></div></aside>'
         '<section class=instruction-workspace><div class=instruction-workspace-header><div>'
         f'<h2 data-selected-directory>{h(root)}</h2><p class=muted data-selected-summary role=status>Repository-visible instruction sources</p></div>'
+        '<div><button type=button class=instruction-add-button data-add-source hidden>Add AGENTS.md here</button>'
         '<div class=instruction-tabs role=tablist aria-label="Instruction view">'
         '<button class=instruction-tab id=instruction-tab-effective type=button role=tab data-instruction-tab=effective aria-selected=false tabindex=-1>Effective</button>'
         '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=true tabindex=0>Sources</button>'
         '<button class=instruction-tab id=instruction-tab-delta type=button role=tab data-instruction-tab=delta aria-selected=false tabindex=-1>Changes</button>'
-        '</div></div>' + "".join(directory_views) + '</section></div>'
+        '</div></div></div>' + "".join(directory_views) + '</section></div>'
+        + f'<section class=instruction-draft data-instruction-draft data-base-commit="{h(commit)}" '
+        f'data-max-file-bytes="{report["max_file_bytes"]}" hidden>'
+        '<div class=instruction-draft-header><div><h2 data-draft-title>Local draft</h2>'
+        '<p class=muted>Edit one concrete source in page memory. Nothing is saved to the repository.</p></div>'
+        '<div class=instruction-draft-actions><button type=button data-copy-patch disabled>Copy patch</button>'
+        '<button type=button data-download-patch disabled>Download patch</button>'
+        '<button type=button data-discard-draft>Discard draft</button></div></div>'
+        '<div class="warn instruction-stale-draft" data-stale-draft role=alert hidden><strong>Stale base.</strong> '
+        'The published commit or source hash changed. Discard this draft and review the current source before continuing.</div>'
+        '<div class=instruction-draft-grid><div><label class=instruction-editor-label><span data-editor-label>Source content</span>'
+        '<textarea class=instruction-editor data-draft-editor spellcheck=false></textarea></label>'
+        '<p class="muted instruction-draft-status" data-draft-status role=status></p></div>'
+        '<aside class=instruction-impact aria-label="Draft impact"><h3>Deterministic impact</h3>'
+        '<p data-selected-impact></p><p><strong data-affected-count>0 directories</strong> use this source.</p>'
+        '<details><summary>Show affected directories</summary><ol class=instruction-affected data-affected-directories></ol></details></aside></div>'
+        '<div class=instruction-diff><h3>Source diff</h3><pre data-source-diff></pre></div>'
+        '<div class=instruction-diff><h3>Selected-directory effective diff</h3><pre data-effective-diff></pre></div>'
+        '<section class=instruction-patch><div class=instruction-patch-header><div><h3>Portable patch</h3>'
+        '<p class=muted>Standard unified diff with the immutable base recorded in its header.</p></div></div>'
+        '<pre data-patch-preview tabindex=0></pre><p class="muted instruction-export-status" data-export-status role=status></p></section>'
+        '</section>'
         + findings_card
         + '<section class=instruction-source-library data-source-library><h2 data-source-library-title>Sources</h2>'
         '<p class=muted data-source-library-note>Each source is rendered once. Enable JavaScript to browse effective directory chains.</p>'
@@ -2263,12 +2373,39 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   const sourceNodes = Array.from(document.querySelectorAll("[data-instruction-source]"));
   const sourceById = new Map(sourceNodes.map((source) => [source.id, source]));
   const viewByPath = new Map(views.map((view) => [view.dataset.instructionView, view]));
+  const draftPanel = document.querySelector("[data-instruction-draft]");
+  const draftEditor = document.querySelector("[data-draft-editor]");
+  const draftStatus = document.querySelector("[data-draft-status]");
+  const sourceDiff = document.querySelector("[data-source-diff]");
+  const effectiveDiff = document.querySelector("[data-effective-diff]");
+  const selectedImpact = document.querySelector("[data-selected-impact]");
+  const affectedCount = document.querySelector("[data-affected-count]");
+  const affectedList = document.querySelector("[data-affected-directories]");
+  const staleDraft = document.querySelector("[data-stale-draft]");
+  const addSourceButton = document.querySelector("[data-add-source]");
+  const draftTitle = document.querySelector("[data-draft-title]");
+  const editorLabel = document.querySelector("[data-editor-label]");
+  const patchPreview = document.querySelector("[data-patch-preview]");
+  const copyPatchButton = document.querySelector("[data-copy-patch]");
+  const downloadPatchButton = document.querySelector("[data-download-patch]");
+  const exportStatus = document.querySelector("[data-export-status]");
   if (!tree || !nodes.length || !views.length || !sourceLibrary || !sourceStorage || !orphanContainer) return;
 
   let selectedPath = "";
   let activePanel = "effective";
   let filtering = false;
   let expansionSnapshot = new Map();
+  let draftedSource = null;
+  let draftOperation = "edit";
+  let originalContent = "";
+  let editorOriginalContent = "";
+  let draftDirty = false;
+  let draftAffectedViews = [];
+  let virtualSource = null;
+  let draftStale = false;
+  let currentPatch = "";
+  const maxDraftBytes = Number(draftPanel.dataset.maxFileBytes);
+  views.forEach((view) => { view.dataset.baseSourceIds = view.dataset.sourceIds; });
   const orphanSources = sourceNodes.filter((source) => source.dataset.sourceMapped !== "true");
   sourceLibrary.hidden = orphanSources.length === 0;
   if (orphanSources.length) {
@@ -2370,6 +2507,411 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     });
   }
 
+  function sourceDirectory(path) {
+    const parts = path.split("/");
+    parts.pop();
+    return parts.join("/") || ".";
+  }
+
+  function sourceFilename(path) {
+    return path.split("/").pop();
+  }
+
+  function isInstructionCandidate(source) {
+    return ["AGENTS.md", "AGENTS.override.md"].includes(sourceFilename(source.dataset.sourcePath));
+  }
+
+  function localCandidates(path) {
+    return sourceNodes.filter((source) => source !== virtualSource && isInstructionCandidate(source) &&
+      source.dataset.sourceDirectory === path);
+  }
+
+  function updateAddSourceAction() {
+    if (!addSourceButton) return;
+    addSourceButton.hidden = Boolean(draftedSource) || localCandidates(selectedPath).length > 0;
+  }
+
+  function restoreBaseChains() {
+    views.forEach((view) => { view.dataset.sourceIds = view.dataset.baseSourceIds; });
+  }
+
+  function fallbackFor(source) {
+    if (sourceFilename(source.dataset.sourcePath) !== "AGENTS.override.md") return null;
+    const fallbackPath = source.dataset.sourceDirectory === "."
+      ? "AGENTS.md" : `${source.dataset.sourceDirectory}/AGENTS.md`;
+    return sourceNodes.find((candidate) => candidate !== source && candidate.dataset.sourcePath === fallbackPath &&
+      candidate.dataset.sourceSelectable === "true") || null;
+  }
+
+  function applyDraftOverlay() {
+    restoreBaseChains();
+    if (!draftedSource) {
+      draftAffectedViews = [];
+      return;
+    }
+    if (draftOperation === "edit") {
+      draftAffectedViews = views.filter((view) => view.dataset.baseSourceIds.split(" ").includes(draftedSource.id));
+      return;
+    }
+    if (draftOperation === "create") {
+      if (!draftEditor.value.length) {
+        draftAffectedViews = [];
+        return;
+      }
+      const directory = draftedSource.dataset.sourceDirectory;
+      draftAffectedViews = views.filter((view) => view.dataset.instructionView === directory ||
+        view.dataset.instructionView.startsWith(directory === "." ? "" : directory + "/"));
+      const targetDepth = directory === "." ? 0 : directory.split("/").length;
+      draftAffectedViews.forEach((view) => {
+        const ids = view.dataset.baseSourceIds.split(" ").filter(Boolean);
+        const insertion = ids.findIndex((id) => {
+          const source = sourceById.get(id);
+          const sourceDir = source?.dataset.sourceDirectory || ".";
+          const depth = sourceDir === "." ? 0 : sourceDir.split("/").length;
+          return depth > targetDepth;
+        });
+        ids.splice(insertion < 0 ? ids.length : insertion, 0, draftedSource.id);
+        view.dataset.sourceIds = ids.join(" ");
+      });
+      return;
+    }
+    const fallback = fallbackFor(draftedSource);
+    draftAffectedViews = views.filter((view) => view.dataset.baseSourceIds.split(" ").includes(draftedSource.id));
+    draftAffectedViews.forEach((view) => {
+      const ids = view.dataset.baseSourceIds.split(" ").filter(Boolean);
+      const index = ids.indexOf(draftedSource.id);
+      if (fallback) ids.splice(index, 1, fallback.id);
+      else ids.splice(index, 1);
+      view.dataset.sourceIds = ids.join(" ");
+    });
+  }
+
+  function sourceText(source, useDraft) {
+    if (useDraft && source === draftedSource) return draftContentForPatch();
+    return source.querySelector("pre")?.textContent || "";
+  }
+
+  function editorText(content) {
+    return content.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
+  }
+
+  function draftContentForPatch() {
+    if (draftOperation === "delete") return "";
+    const value = draftEditor.value;
+    if (draftedSource?.dataset.sourceLineEnding === "crlf") return value.replace(/\\n/g, "\\r\\n");
+    if (draftedSource?.dataset.sourceLineEnding === "cr") return value.replace(/\\n/g, "\\r");
+    return value;
+  }
+
+  function effectiveText(view, useDraft, useBase) {
+    const ids = (useBase ? view.dataset.baseSourceIds : view.dataset.sourceIds).split(" ").filter(Boolean);
+    return ids.map((id) => {
+      const source = sourceById.get(id);
+      if (!source) return "";
+      return `===== ${source.dataset.sourcePath} =====\\n${sourceText(source, useDraft)}`;
+    }).join("\\n\\n");
+  }
+
+  function addDiffLine(target, marker, line, className) {
+    const span = document.createElement("span");
+    span.className = `instruction-diff-line ${className || ""}`;
+    span.textContent = marker + line;
+    target.append(span);
+  }
+
+  function renderDiff(before, after, target) {
+    target.replaceChildren();
+    if (before === after) {
+      addDiffLine(target, "", "No changes.", "muted");
+      return;
+    }
+    const oldLines = before.split("\\n");
+    const newLines = after.split("\\n");
+    let prefix = 0;
+    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix &&
+           oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix += 1;
+    const contextStart = Math.max(0, prefix - 3);
+    if (contextStart > 0) addDiffLine(target, "", `… ${contextStart} unchanged line(s) …`, "muted");
+    oldLines.slice(contextStart, prefix).forEach((line) => addDiffLine(target, "  ", line, ""));
+    oldLines.slice(prefix, oldLines.length - suffix).forEach((line) => addDiffLine(target, "- ", line, "instruction-diff-remove"));
+    newLines.slice(prefix, newLines.length - suffix).forEach((line) => addDiffLine(target, "+ ", line, "instruction-diff-add"));
+    const suffixLines = oldLines.slice(oldLines.length - suffix);
+    suffixLines.slice(0, 3).forEach((line) => addDiffLine(target, "  ", line, ""));
+    if (suffixLines.length > 3) addDiffLine(target, "", `… ${suffixLines.length - 3} unchanged line(s) …`, "muted");
+  }
+
+  function quoteGitPath(path) {
+    if (new RegExp("^[A-Za-z0-9._/-]+$").test(path)) return path;
+    return JSON.stringify(path);
+  }
+
+  function patchTokens(text) {
+    if (!text.length) return [];
+    const parts = text.split("\\n");
+    const tokens = parts.slice(0, -1).map((line) => line + "\\n");
+    if (parts[parts.length - 1]) tokens.push(parts[parts.length - 1]);
+    return tokens;
+  }
+
+  function appendPatchToken(target, marker, token) {
+    const hasNewline = token.endsWith("\\n");
+    target.push(marker + (hasNewline ? token.slice(0, -1) : token));
+    if (!hasNewline) target.push("\\\\ No newline at end of file");
+  }
+
+  function buildUnifiedPatch() {
+    if (!draftedSource) return "";
+    const after = draftContentForPatch();
+    if (draftOperation === "edit" && after === originalContent) return "";
+    if (draftOperation === "create" && !after.length) return "";
+    const path = draftedSource.dataset.sourcePath;
+    const aPath = quoteGitPath(`a/${path}`);
+    const bPath = quoteGitPath(`b/${path}`);
+    const oldTokens = patchTokens(originalContent);
+    const newTokens = patchTokens(after);
+    let prefix = 0;
+    while (prefix < oldTokens.length && prefix < newTokens.length && oldTokens[prefix] === newTokens[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < oldTokens.length - prefix && suffix < newTokens.length - prefix &&
+           oldTokens[oldTokens.length - 1 - suffix] === newTokens[newTokens.length - 1 - suffix]) suffix += 1;
+    const contextBefore = Math.min(3, prefix);
+    const contextAfter = Math.min(3, suffix);
+    const oldChangeEnd = oldTokens.length - suffix;
+    const newChangeEnd = newTokens.length - suffix;
+    const oldHunkStart = prefix - contextBefore;
+    const newHunkStart = prefix - contextBefore;
+    const oldCount = contextBefore + (oldChangeEnd - prefix) + contextAfter;
+    const newCount = contextBefore + (newChangeEnd - prefix) + contextAfter;
+    const lines = [
+      "# LLM Ops Hub instruction proposal",
+      `# base-commit: ${draftPanel.dataset.baseCommit}`,
+      `# source-sha256: ${draftOperation === "create" ? "absent" : draftedSource.dataset.sourceHash}`,
+      `diff --git ${aPath} ${bPath}`,
+    ];
+    if (draftOperation === "create") lines.push("new file mode 100644");
+    if (draftOperation === "delete") lines.push("deleted file mode 100644");
+    lines.push(draftOperation === "create" ? "--- /dev/null" : `--- ${aPath}`);
+    lines.push(draftOperation === "delete" ? "+++ /dev/null" : `+++ ${bPath}`);
+    const oldStart = oldCount ? oldHunkStart + 1 : 0;
+    const newStart = newCount ? newHunkStart + 1 : 0;
+    lines.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    oldTokens.slice(oldHunkStart, prefix).forEach((token) => appendPatchToken(lines, " ", token));
+    oldTokens.slice(prefix, oldChangeEnd).forEach((token) => appendPatchToken(lines, "-", token));
+    newTokens.slice(prefix, newChangeEnd).forEach((token) => appendPatchToken(lines, "+", token));
+    oldTokens.slice(oldChangeEnd, oldChangeEnd + contextAfter).forEach((token) => appendPatchToken(lines, " ", token));
+    return lines.join("\\n") + "\\n";
+  }
+
+  function updatePatchExport() {
+    const draftBytes = new TextEncoder().encode(draftContentForPatch()).length;
+    if (draftBytes > maxDraftBytes) {
+      currentPatch = "";
+      patchPreview.textContent = `Patch unavailable: draft content exceeds the ${maxDraftBytes}-byte source limit.`;
+      copyPatchButton.disabled = true;
+      downloadPatchButton.disabled = true;
+      exportStatus.textContent = `Export blocked: draft content is ${draftBytes} bytes.`;
+      return;
+    }
+    currentPatch = buildUnifiedPatch();
+    patchPreview.textContent = currentPatch || "Make a content change to generate a patch.";
+    const blocked = !currentPatch || draftStale;
+    copyPatchButton.disabled = blocked;
+    downloadPatchButton.disabled = blocked;
+    exportStatus.textContent = draftStale
+      ? "Export blocked: the published base changed. Discard this draft and review the current source."
+      : (currentPatch ? "Ready to copy or download." : "No exportable change yet.");
+  }
+
+  function affectedViews() {
+    return draftedSource ? draftAffectedViews : [];
+  }
+
+  function updateDraftPreview() {
+    if (!draftedSource) return;
+    draftDirty = draftOperation !== "edit" || draftEditor.value !== editorOriginalContent;
+    applyDraftOverlay();
+    draftedSource.classList.toggle("is-drafted", draftDirty);
+    let pill = draftedSource.querySelector("[data-draft-pill]");
+    if (draftDirty && !pill) {
+      pill = document.createElement("span");
+      pill.className = "pill draft-pill";
+      pill.dataset.draftPill = "";
+      pill.textContent = draftOperation === "create" ? "new" : (draftOperation === "delete" ? "delete" : "draft");
+      draftedSource.querySelector(".instruction-source-meta")?.prepend(pill);
+    } else if (!draftDirty && pill) pill.remove();
+    const activeView = viewByPath.get(selectedPath);
+    if (draftOperation === "create") {
+      draftStatus.textContent = draftEditor.value.length
+        ? "Proposed addition · stored only in this page" : "Add content to make the proposed source applicable.";
+      draftedSource.querySelector("pre").textContent = draftEditor.value;
+      if (activeView) renderEffective(activeView);
+    } else if (draftOperation === "delete") {
+      draftStatus.textContent = "Proposed deletion · stored only in this page";
+    } else {
+      draftStatus.textContent = draftDirty ? "Unsaved local draft · stored only in this page" : "Draft matches the published source.";
+    }
+    renderDiff(editorOriginalContent, draftEditor.value, sourceDiff);
+    const appliesHere = activeView && draftAffectedViews.includes(activeView);
+    selectedImpact.textContent = appliesHere
+      ? `Changes the effective repository instructions for ${selectedPath}.`
+      : `Does not change the effective repository instructions for ${selectedPath}.`;
+    renderDiff(
+      activeView ? effectiveText(activeView, false, true) : "",
+      activeView ? effectiveText(activeView, true, false) : "",
+      effectiveDiff
+    );
+    const affected = affectedViews();
+    affectedCount.textContent = affected.length === 1 ? "1 directory" : `${affected.length} directories`;
+    const affectedKey = `${draftOperation}:${draftedSource.id}:${draftAffectedViews.length}`;
+    if (affectedList.dataset.sourceId !== affectedKey) {
+      affectedList.dataset.sourceId = affectedKey;
+      affectedList.replaceChildren();
+      affected.forEach((view) => {
+        const item = document.createElement("li");
+        item.textContent = view.dataset.instructionView;
+        affectedList.append(item);
+      });
+    }
+    updatePatchExport();
+  }
+
+  async function checkDraftBase() {
+    if (!draftedSource) return;
+    const checkedSource = draftedSource;
+    const checkedOperation = draftOperation;
+    try {
+      const response = await fetch("data/index.json", { cache: "no-store" });
+      if (!response.ok) return;
+      const current = await response.json();
+      if (draftedSource !== checkedSource || draftOperation !== checkedOperation) return;
+      const currentSource = current.instructions?.sources?.find((source) => source.path === checkedSource.dataset.sourcePath);
+      const sourceMismatch = checkedOperation === "create"
+        ? Boolean(currentSource)
+        : !currentSource || currentSource.sha256 !== checkedSource.dataset.sourceHash;
+      const mismatched = current.commit !== draftPanel.dataset.baseCommit || sourceMismatch;
+      draftStale = mismatched;
+      staleDraft.hidden = !mismatched;
+      updatePatchExport();
+    } catch (_error) {
+      // Offline and file:// views remain editable; provenance stays visible in the page.
+    }
+  }
+
+  function discardDraft(askFirst) {
+    if (!draftedSource) return true;
+    if (askFirst && draftDirty && !window.confirm("Discard the unsaved local instruction draft?")) return false;
+    restoreBaseChains();
+    draftedSource.classList.remove("is-drafted");
+    draftedSource.querySelector("[data-draft-pill]")?.remove();
+    if (virtualSource) {
+      sourceById.delete(virtualSource.id);
+      const index = sourceNodes.indexOf(virtualSource);
+      if (index >= 0) sourceNodes.splice(index, 1);
+      virtualSource.remove();
+      virtualSource = null;
+    }
+    draftedSource = null;
+    draftOperation = "edit";
+    originalContent = "";
+    editorOriginalContent = "";
+    draftDirty = false;
+    draftStale = false;
+    currentPatch = "";
+    draftAffectedViews = [];
+    delete affectedList.dataset.sourceId;
+    draftEditor.value = "";
+    draftPanel.hidden = true;
+    staleDraft.hidden = true;
+    patchPreview.textContent = "";
+    exportStatus.textContent = "";
+    copyPatchButton.disabled = true;
+    downloadPatchButton.disabled = true;
+    draftEditor.readOnly = false;
+    const activeView = viewByPath.get(selectedPath);
+    if (activeView) renderEffective(activeView);
+    updateAddSourceAction();
+    return true;
+  }
+
+  function configureDraft(source, operation) {
+    draftedSource = source;
+    draftOperation = operation;
+    draftStale = false;
+    staleDraft.hidden = true;
+    originalContent = operation === "create" ? "" : (source.querySelector("pre")?.textContent || "");
+    editorOriginalContent = editorText(originalContent);
+    draftEditor.value = operation === "delete" ? "" : editorOriginalContent;
+    draftEditor.readOnly = operation === "delete";
+    draftTitle.textContent = operation === "create" ? "Proposed source addition" :
+      (operation === "delete" ? "Proposed source deletion" : "Local draft");
+    editorLabel.textContent = operation === "delete" ? "Source content after deletion" : "Source content";
+    draftPanel.hidden = false;
+    updateAddSourceAction();
+    updateDraftPreview();
+    const activeView = viewByPath.get(selectedPath);
+    if (activeView) renderEffective(activeView);
+    checkDraftBase();
+    draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    draftEditor.focus();
+  }
+
+  function startDraft(source, operation) {
+    if (draftedSource === source && draftOperation === operation) {
+      draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      draftEditor.focus();
+      return;
+    }
+    if (!discardDraft(true)) return;
+    configureDraft(source, operation);
+  }
+
+  function makeVirtualSource(path) {
+    const source = document.createElement("article");
+    source.className = "instruction-source-block";
+    source.id = "instruction-source-local-addition";
+    source.dataset.instructionSource = "";
+    source.dataset.sourcePath = path;
+    source.dataset.sourceHash = "missing";
+    source.dataset.sourceDirectory = sourceDirectory(path);
+    source.dataset.sourceSelectable = "true";
+    source.dataset.sourceLineEnding = "lf";
+    source.dataset.sourceMapped = "true";
+    const heading = document.createElement("div");
+    heading.className = "instruction-source-heading";
+    const identity = document.createElement("div");
+    const scope = document.createElement("span");
+    scope.className = "instruction-scope";
+    scope.dataset.sourceScope = "";
+    scope.textContent = "proposed";
+    const title = document.createElement("h3");
+    const code = document.createElement("code");
+    code.textContent = path;
+    title.append(code);
+    identity.append(scope, title);
+    const meta = document.createElement("div");
+    meta.className = "instruction-source-meta";
+    const kind = document.createElement("span");
+    kind.className = "pill";
+    kind.textContent = "new source";
+    meta.append(kind);
+    heading.append(identity, meta);
+    const content = document.createElement("pre");
+    source.append(heading, content);
+    sourceStorage.append(source);
+    sourceNodes.push(source);
+    sourceById.set(source.id, source);
+    return source;
+  }
+
+  function startCreateDraft() {
+    if (!discardDraft(true)) return;
+    const path = selectedPath === "." ? "AGENTS.md" : `${selectedPath}/AGENTS.md`;
+    virtualSource = makeVirtualSource(path);
+    configureDraft(virtualSource, "create");
+  }
+
   function updateLocation() {
     const url = new URL(window.location.href);
     url.searchParams.set("dir", selectedPath);
@@ -2390,11 +2932,13 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     document.querySelector("[data-selected-summary]").textContent = count === 1 ? "1 applicable source" : `${count} applicable sources`;
     renderEffective(view);
     setPanel(activePanel, false);
+    if (draftedSource) updateDraftPreview();
+    updateAddSourceAction();
     if (updateUrl) updateLocation();
   }
 
   function applyFilter() {
-    const query = filter.value.trim().toLocaleLowerCase();
+    const query = filter.value.trim().toLowerCase();
     if (query && !filtering) {
       expansionSnapshot = new Map(nodes.map((node) => [node, node.getAttribute("aria-expanded")]));
       filtering = true;
@@ -2408,6 +2952,8 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         });
       }
       filtering = false;
+      const selectedNode = nodes.find((node) => node.getAttribute("aria-selected") === "true");
+      if (selectedNode) expandAncestors(selectedNode);
       repairTreeTabStop();
       empty.hidden = visibleNodes().length > 0;
       return;
@@ -2478,10 +3024,67 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   });
 
   document.addEventListener("click", (event) => {
+    const edit = event.target.closest("[data-edit-source]");
+    if (edit) {
+      const source = edit.closest("[data-instruction-source]");
+      if (source) startDraft(source, "edit");
+      return;
+    }
+    const deletion = event.target.closest("[data-delete-source]");
+    if (deletion) {
+      const source = deletion.closest("[data-instruction-source]");
+      if (source) startDraft(source, "delete");
+      return;
+    }
     const link = event.target.closest("[data-source-jump]");
     if (!link) return;
     setPanel("effective", true);
     requestAnimationFrame(() => document.querySelector(link.getAttribute("href"))?.scrollIntoView({ block: "start" }));
+  });
+  addSourceButton?.addEventListener("click", startCreateDraft);
+  copyPatchButton?.addEventListener("click", async () => {
+    if (!currentPatch || draftStale) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(currentPatch);
+      else throw new Error("Clipboard API unavailable");
+      exportStatus.textContent = "Patch copied to the clipboard.";
+    } catch (_error) {
+      const fallback = document.createElement("textarea");
+      fallback.value = currentPatch;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.append(fallback);
+      fallback.select();
+      const copied = document.execCommand("copy");
+      fallback.remove();
+      exportStatus.textContent = copied
+        ? "Patch copied to the clipboard." : "Copy was unavailable. Select the visible patch and copy it manually.";
+    }
+  });
+  downloadPatchButton?.addEventListener("click", () => {
+    if (!currentPatch || draftStale || !draftedSource) return;
+    const filenamePart = draftedSource.dataset.sourcePath.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-|-$/g, "");
+    const blob = new Blob([currentPatch], { type: "text/x-diff;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `instruction-${draftOperation}-${filenamePart || "change"}.patch`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    exportStatus.textContent = `Downloaded ${link.download}.`;
+  });
+  draftEditor?.addEventListener("input", updateDraftPreview);
+  document.querySelector("[data-discard-draft]")?.addEventListener("click", () => discardDraft(true));
+  window.addEventListener("beforeunload", (event) => {
+    if (!draftDirty) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && draftedSource) checkDraftBase();
   });
   filter.addEventListener("input", applyFilter);
   window.addEventListener("popstate", () => {
@@ -3654,12 +4257,15 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     finding_codes = {finding["code"] for finding in instruction_report["findings"]}
     assert {"symlink", "claude-include-mismatch", "claude-include-missing"} <= finding_codes
     public_instruction_report = instruction_sources_json(instruction_report)
+    assert public_instruction_report["max_file_bytes"] == INSTRUCTIONS_MAX_FILE_BYTES_DEFAULT
     assert all("content" not in source for source in public_instruction_report["sources"]), (
         "data/index.json must never publish instruction text"
     )
     instruction_html = instruction_sources_body(
         instruction_report, {"backlog_ref": "main"}, "abcdef123456"
     )
+    assert pre_text_html("alpha\r\nbeta\r\n") == "&#10;alpha&#13;\nbeta&#13;\n"
+    assert pre_text_html("\nleading blank\n") == "&#10;\nleading blank\n"
     assert "&lt;script&gt;alert(&#x27;root&#x27;)&lt;/script&gt;" in instruction_html
     assert "<script>alert('root')</script>" not in instruction_html
     assert instruction_html.count("root &lt;script&gt;") == 1, "each source preview must render once"
@@ -3676,7 +4282,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert 'event.key === "Home"' in instruction_html
     assert '<select id=instruction-directory>' not in instruction_html
     assert "src/api/AGENTS.override.md" in instruction_html and "added here" in instruction_html
-    assert instruction_html.count('data-source-mapped="false"') == 3, (
+    assert instruction_html.count('data-source-mapped="false"') == 4, (
         "lint and omitted sources outside every effective chain must remain identifiable"
     )
     assert '.js .instruction-source-storage{display:none}' in CSS
@@ -3695,6 +4301,53 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert instruction_html.count("repairTreeTabStop();") == 2, (
         "filtering and clearing the filter must both restore a visible tree tab stop"
     )
+    assert "toLocaleLowerCase" not in instruction_html
+    assert 'filter.value.trim().toLowerCase()' in instruction_html
+    restore_pos = instruction_html.index("expansionSnapshot.forEach")
+    expand_selected_pos = instruction_html.index("if (selectedNode) expandAncestors(selectedNode)")
+    repair_pos = instruction_html.index("repairTreeTabStop();", expand_selected_pos)
+    assert restore_pos < expand_selected_pos < repair_pos, (
+        "clearing a filter must restore the snapshot, then keep the selected path visible before repairing focus"
+    )
+    assert instruction_html.count("class=instruction-edit-button data-edit-source") == 4, (
+        "only published sources used by an effective chain must be locally editable"
+    )
+    assert instruction_html.count("class=instruction-delete-button data-delete-source") == 4
+    assert "src/api/AGENTS.md" in {source["path"] for source in instruction_report["sources"]}, (
+        "shadowed candidates must be available for deterministic deletion fallback previews"
+    )
+    assert "data-add-source hidden>Add AGENTS.md here" in instruction_html
+    assert 'data-base-commit="abcdef123456"' in instruction_html
+    assert "Edit one concrete source in page memory" in instruction_html
+    assert 'data-source-path="src/api/AGENTS.override.md"' in instruction_html
+    assert 'data-source-hash="' in instruction_html
+    assert 'fetch("data/index.json", { cache: "no-store" })' in instruction_html
+    assert 'window.addEventListener("beforeunload"' in instruction_html
+    assert 'span.textContent = marker + line;' in instruction_html, (
+        "untrusted draft diff lines must be rendered as text, never HTML"
+    )
+    assert "innerHTML" not in instruction_html, "draft and explorer paths must not inject HTML"
+    assert "function affectedViews()" in instruction_html
+    assert "currentSource.sha256 !== checkedSource.dataset.sourceHash" in instruction_html
+    assert 'draftOperation === "create"' in instruction_html
+    assert "function applyDraftOverlay()" in instruction_html
+    assert "function fallbackFor(source)" in instruction_html
+    assert "function startCreateDraft()" in instruction_html
+    assert "source.dataset.sourcePath = path;" in instruction_html
+    assert 'code.textContent = path;' in instruction_html
+    assert 'draftedSource.querySelector("pre").textContent = draftEditor.value;' in instruction_html
+    assert "data-copy-patch disabled" in instruction_html
+    assert "data-download-patch disabled" in instruction_html
+    assert 'data-max-file-bytes="65536"' in instruction_html
+    assert "function buildUnifiedPatch()" in instruction_html
+    assert '`diff --git ${aPath} ${bPath}`' in instruction_html
+    assert '\\\\ No newline at end of file' in instruction_html
+    assert 'patchPreview.textContent = currentPatch' in instruction_html
+    assert "navigator.clipboard?.writeText" in instruction_html
+    assert 'new Blob([currentPatch], { type: "text/x-diff;charset=utf-8" })' in instruction_html
+    assert "new TextEncoder().encode(draftContentForPatch()).length" in instruction_html
+    assert "function draftContentForPatch()" in instruction_html
+    assert 'sourceLineEnding === "crlf"' in instruction_html
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",
@@ -3719,6 +4372,66 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "instructions_max_total_bytes": 4,
     }))
     assert any(finding["code"] == "total-bytes-limit" for finding in total_limited_report["findings"])
+    lint_budget_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "root rules\n",
+        "CLAUDE.md": "WRONG include\n",
+        "src/AGENTS.md": "shadow rules\n",
+        "src/AGENTS.override.md": "override!\n",
+        "src/CLAUDE.md": "@AGENTS.md\n",
+    }), instructions_settings({
+        "instructions_dir": ".",
+        "instructions_lint_claude_include": True,
+        "instructions_max_total_bytes": 40,
+    }))
+    assert any(
+        finding["code"] == "claude-include-mismatch" and finding["path"] == "CLAUDE.md"
+        for finding in lint_budget_report["findings"]
+    ), "shadowed preview candidates must not consume the lint source budget"
+    invalid_utf8_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": b"caf\xe9 rules\nline2\n",
+    }), instructions_settings({"instructions_dir": "."}))
+    invalid_utf8_source = invalid_utf8_report["sources"][0]
+    assert not invalid_utf8_source["editable"] and "\ufffd" in invalid_utf8_source["content"]
+    assert any(finding["code"] == "invalid-utf8" for finding in invalid_utf8_report["findings"])
+    invalid_utf8_html = instruction_sources_body(
+        invalid_utf8_report, {"backlog_ref": "main"}, "abcdef123456"
+    )
+    assert "class=instruction-edit-button data-edit-source" not in invalid_utf8_html
+    assert "class=instruction-delete-button data-delete-source" not in invalid_utf8_html
+    newline_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "alpha\r\nbeta\r\n",
+    }), instructions_settings({"instructions_dir": "."}))
+    assert newline_report["sources"][0]["editable"]
+    assert newline_report["sources"][0]["line_ending"] == "crlf"
+    mixed_newline_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "alpha\r\nbeta\ngamma\r",
+    }), instructions_settings({"instructions_dir": "."}))
+    assert not mixed_newline_report["sources"][0]["editable"]
+    assert any(finding["code"] == "mixed-line-endings" for finding in mixed_newline_report["findings"])
+    zero_candidate_report = instruction_sources_report(_InstructionMemorySource({
+        "empty/AGENTS.md": "",
+        "empty/main.py": "pass",
+    }), instructions_settings({"instructions_dir": "."}))
+    zero_candidate = next(
+        source for source in zero_candidate_report["sources"] if source["path"] == "empty/AGENTS.md"
+    )
+    assert zero_candidate["content"] == "" and not zero_candidate["selectable"], (
+        "an existing empty candidate must prevent a duplicate create proposal without entering a chain"
+    )
+    omitted_fallback_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "fall",
+        "AGENTS.override.md": "over",
+    }), instructions_settings({
+        "instructions_dir": ".",
+        "instructions_max_file_bytes": 4,
+        "instructions_max_total_bytes": 4,
+    }))
+    omitted_fallback_html = instruction_sources_body(
+        omitted_fallback_report, {"backlog_ref": "main"}, "abcdef123456"
+    )
+    assert 'aria-label="Propose deleting AGENTS.override.md"' not in omitted_fallback_html, (
+        "deletion must be unavailable when a selectable fallback exists but its content was not published"
+    )
     for unsafe_dir in ("../private", "/absolute", "docs/../private", "docs\\private"):
         try:
             instructions_settings({"instructions_dir": unsafe_dir})

@@ -1,6 +1,6 @@
 # Plan: repository instruction explorer and change proposals
 
-Status: phase 1 implemented; phases 2-4 planned
+Status: phases 1-2 implemented; phase 3 patch export implemented; phase 4 planned
 Date: 2026-08-21
 Scope: repository-visible agent instructions for one monitored project
 Constraints: the hub stays read-only, Git stays the database, generated pages
@@ -17,9 +17,9 @@ effective combined text without losing source boundaries.
 Editing uses a local browser draft. The hub never saves the draft to the
 monitored repository and exposes no mutation API. Before export, the UI shows
 the diff and the directories whose effective instruction chains would change.
-The result can be copied or downloaded as a patch, or packaged as a reviewable
-change proposal that a project-side workflow can turn into a commit or pull
-request.
+The result can be copied or downloaded as a patch that a project-side workflow
+can turn into a commit or pull request. A second machine-readable proposal
+format is deferred until a concrete consumer justifies a versioned contract.
 
 `AGENTS.md` as the source of truth with a sibling `CLAUDE.md` containing only
 `@AGENTS.md` is the recommended architecture for projects adopting LLM Ops
@@ -282,21 +282,32 @@ verification remains a release check rather than an implementation claim.
 
 ### Phase 2 - local draft and deterministic impact preview
 
-- edit one existing source in page memory;
-- recompute Codex chains using an in-memory overlay;
+- edit one existing source in page memory; **implemented 2026-08-21**
+- recompute Codex chains using an in-memory overlay; **implemented for edits,
+  additions, deletions, and override fallback selection**
 - show source diff, selected-directory effective diff, and affected subtree;
-- detect stale base commit/hash;
+  **implemented for all three operations**
+- detect stale base commit/hash; **implemented through a no-cache comparison
+  with the currently published `data/index.json`**
 - support proposed add/delete after single-file editing is verified;
+  **implemented, including shadowed `AGENTS.md` fallback after override
+  deletion**
 - add escaping and adversarial-content tests for every draft-rendering path.
+  **implemented with text-only DOM construction and an end-to-end malicious
+  draft fixture**
 
 ### Phase 3 - portable change proposal
 
-- export/copy a unified diff and machine-readable proposal;
-- define and validate a versioned proposal schema;
-- add a non-GitHub application path;
+- export/copy a unified diff; **implemented with copy and local `.patch`
+  download, including base commit/hash metadata and stale-base blocking**
+- define and validate a versioned proposal schema; **deferred until a concrete
+  machine consumer exists**
+- add a non-GitHub application path; **implemented through standard
+  `git apply --check` / `git apply` workflow documentation**
 - choose and implement the GitHub handoff without adding hub credentials or a
   mutation endpoint;
-- document project-side validation before commit/PR creation.
+- document project-side validation before commit/PR creation; **implemented
+  for the local patch path; forge handoff remains**
 
 ### Phase 4 - Claude profile and bridge-policy presentation
 
@@ -320,7 +331,10 @@ Resolve these before implementing the named phase:
 2. **Phase 3:** the first GitHub transport: issue handoff, local checkout
    command, or a separately authorized PR component. Default to issue plus
    portable proposal because it preserves the current deployment model.
-3. **Phase 3:** proposal JSON schema and maximum exported content size.
+3. **Phase 3:** proposal JSON schema and maximum exported content size. JSON is
+   now deferred until a concrete consumer exists; the configured
+   `instructions_max_file_bytes` limit constrains the initial single-file patch
+   workflow.
 4. **Phase 4:** exact Claude profile surface after checking current vendor
    behavior, including path-scoped rules and repository-visible exclusions.
 

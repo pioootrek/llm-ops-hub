@@ -229,6 +229,47 @@ source previews are emitted once and moved into the selected effective view in
 the browser. `data/index.json` contains ordered paths, provenance hashes, limit
 findings, and no instruction text.
 
+A source can be edited or proposed for deletion as a single-file local draft;
+when the selected directory has no local instruction candidate, a new
+`AGENTS.md` can be proposed there. Draft text stays in page memory and is never
+sent to the hub or written to the monitored repository. The browser shows a
+line diff, the effective-instruction diff for the selected directory, and every
+mapped directory affected by the operation. Deleting an override previews a
+bounded, published `AGENTS.md` fallback when one exists. Shadowed candidates are
+therefore included in the HTML report once, but instruction text remains absent
+from `data/index.json`.
+
+Draft actions are offered only when the published source is valid UTF-8 and
+uses one line-ending style. CRLF and CR sources are edited with browser-normalized
+line breaks, then restored to their original style for impact calculation and
+patch export. Invalid UTF-8 and mixed-line-ending sources remain visible but
+read-only, with a report finding explaining why.
+
+The editor compares the draft's base commit and source hash (or the expected
+absence of a newly proposed path) with the current `data/index.json` when
+possible, warns if the published release changed, and warns before leaving with
+an unsaved operation. Reloading or discarding loses the draft.
+
+Every non-empty operation produces a standard unified diff with three lines of
+context. Its header records the base commit and either the source SHA-256 or
+that the path was absent. **Copy patch** uses the Clipboard API with a legacy
+copy fallback; **Download patch** creates a local `.patch` file in the browser.
+Both actions are disabled when the published base is stale. The patch contains
+no credential. Export is also blocked when draft content exceeds the configured
+`instructions_max_file_bytes` limit. Applying remains an explicit project-side
+action:
+
+```sh
+# First compare HEAD with the patch's "# base-commit:" header.
+git apply --check instruction-*.patch
+git apply instruction-*.patch
+# Then run the monitored project's documented fmt/validate commands.
+```
+
+The base header is review metadata; `git apply` does not enforce it. A
+machine-readable proposal format is intentionally deferred until a concrete
+consumer needs one.
+
 ## Human feedback
 
 The hub is read-only, but when `project.github_repo` is set, each rendered
