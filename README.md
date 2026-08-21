@@ -220,9 +220,14 @@ guess which natural-language rule wins.
 The scanner reads the mirrored Git tree at the configured ref and never
 follows symlinks. File-count and byte limits produce visible findings instead
 of silently changing the report. Findings are advisory and do not block a
-valid backlog release. `instructions.html` contains escaped, plain-text source
-previews, each rendered once. `data/index.json` contains ordered paths,
-provenance hashes, limits findings, and no instruction text.
+valid backlog release. `instructions.html` provides a searchable, keyboard-
+navigable directory tree. The selected directory can be viewed as effective
+repository instructions with visible source boundaries, an ordered provenance
+list, or a source delta from its parent directory. Directory and view selection
+are stored in URL query parameters for shareable deep links. Escaped plain-text
+source previews are emitted once and moved into the selected effective view in
+the browser. `data/index.json` contains ordered paths, provenance hashes, limit
+findings, and no instruction text.
 
 ## Human feedback
 

@@ -14,6 +14,10 @@ feedback payloads, and the opt-in repository instruction map. Phase 3 records
 the single-project boundary and contract migration policy. This file remains
 as the implementation record; further work needs a new plan.
 
+Follow-on work for browsing effective repository instructions, editing local
+browser drafts, impact preview, and patch/PR proposals is specified in
+`docs/proposals/2026-08-instruction-explorer.md`.
+
 ## The rule: mega simple, mega functional
 
 The tool earns its keep by being small enough to audit in one sitting. Every
