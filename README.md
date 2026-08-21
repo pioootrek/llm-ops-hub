@@ -239,6 +239,12 @@ bounded, published `AGENTS.md` fallback when one exists. Shadowed candidates are
 therefore included in the HTML report once, but instruction text remains absent
 from `data/index.json`.
 
+Draft actions are offered only when the published source is valid UTF-8 and
+uses one line-ending style. CRLF and CR sources are edited with browser-normalized
+line breaks, then restored to their original style for impact calculation and
+patch export. Invalid UTF-8 and mixed-line-ending sources remain visible but
+read-only, with a report finding explaining why.
+
 The editor compares the draft's base commit and source hash (or the expected
 absence of a newly proposed path) with the current `data/index.json` when
 possible, warns if the published release changed, and warns before leaving with

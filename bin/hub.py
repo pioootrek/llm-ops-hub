@@ -528,6 +528,8 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
             return source_records[path]
         record: dict[str, Any] = {
             "bytes": entry["size"], "path": path, "sha256": None, "content": None,
+            "editable": False,
+            "line_ending": "lf",
             "selectable": entry["mode"] != "120000" and entry["size"] > 0,
         }
         if entry["mode"] == "120000":
@@ -550,7 +552,31 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
             total_bytes += len(data)
             record["bytes"] = len(data)
             record["sha256"] = hashlib.sha256(data).hexdigest()
-            record["content"] = data.decode("utf-8", errors="replace")
+            try:
+                record["content"] = data.decode("utf-8")
+                record["editable"] = True
+                without_crlf = record["content"].replace("\r\n", "")
+                styles = [
+                    style for style, present in [
+                        ("crlf", "\r\n" in record["content"]),
+                        ("cr", "\r" in without_crlf),
+                        ("lf", "\n" in without_crlf),
+                    ] if present
+                ]
+                if len(styles) > 1:
+                    record["editable"] = False
+                    findings.append({
+                        "code": "mixed-line-endings", "path": path,
+                        "message": "Source mixes line-ending styles; draft actions are disabled to avoid normalization.",
+                    })
+                elif styles:
+                    record["line_ending"] = styles[0]
+            except UnicodeDecodeError:
+                record["content"] = data.decode("utf-8", errors="replace")
+                findings.append({
+                    "code": "invalid-utf8", "path": path,
+                    "message": "Source is not valid UTF-8; preview is lossy and draft actions are disabled.",
+                })
         source_records[path] = record
         return record
 
@@ -576,15 +602,6 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
                 chain.append({"path": chosen["path"], "sha256": chosen["sha256"]})
         directory_records.append({"path": directory, "sources": chain})
 
-    # Load bounded, repository-visible candidates that are currently shadowed
-    # by an override. The draft preview needs their exact content to show the
-    # deterministic fallback after a proposed deletion. Effective chains above
-    # are loaded first so unused candidates cannot consume their byte budget.
-    for entry in scoped:
-        if PurePosixPath(entry["path"]).name not in {"AGENTS.md", "AGENTS.override.md"}:
-            continue
-        load_source(entry["path"], entry)
-
     if settings["lint_claude_include"]:
         agent_dirs = {
             str(PurePosixPath(path).parent)
@@ -607,6 +624,14 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
                     "code": "claude-include-mismatch", "path": claude_path,
                     "message": "Optional convention lint: expected the file to contain only @AGENTS.md.",
                 })
+
+    # Load bounded, repository-visible candidates that are currently shadowed
+    # by an override. Effective chains and lint sources go first so preview-only
+    # candidates can use only the remaining shared byte budget.
+    for entry in scoped:
+        if PurePosixPath(entry["path"]).name not in {"AGENTS.md", "AGENTS.override.md"}:
+            continue
+        load_source(entry["path"], entry)
 
     return {
         "profile": INSTRUCTIONS_PROFILE,
@@ -1401,6 +1426,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def h(value: Any) -> str:
     return html.escape(str(value), quote=True)
+
+
+def pre_text_html(value: str) -> str:
+    """Escape exact text for an HTML <pre> round-trip through textContent.
+
+    HTML parsers discard one leading LF directly after a <pre> start tag and
+    normalize literal CR/CRLF. A character-reference sentinel absorbs the
+    first rule; CR references survive the second.
+    """
+    return "&#10;" + h(value).replace("\r", "&#13;")
 
 
 def paragraphs(values: list[str]) -> str:
@@ -2239,12 +2274,12 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         if source["content"] is None:
             content = '<p class=warn>Content was not published. See the report findings above.</p>'
         else:
-            content = f'<pre>{h(source["content"])}</pre>'
+            content = f'<pre>{pre_text_html(source["content"])}</pre>'
         kind = "override" if PurePosixPath(source["path"]).name == "AGENTS.override.md" else "source"
         mapped = source["path"] in mapped_source_paths
         edit_button = ""
         delete_button = ""
-        if source["content"] is not None and mapped:
+        if source["editable"] and mapped:
             edit_button = (
                 f'<button type=button class=instruction-edit-button data-edit-source '
                 f'aria-label="Edit {h(source["path"])}">Edit draft</button>'
@@ -2252,7 +2287,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
             fallback = None
             if PurePosixPath(source["path"]).name == "AGENTS.override.md":
                 fallback = sources_by_path.get(str(PurePosixPath(source["path"]).with_name("AGENTS.md")))
-            if fallback is None or not fallback["selectable"] or fallback["content"] is not None:
+            if fallback is None or not fallback["selectable"] or fallback["editable"]:
                 delete_button = (
                     f'<button type=button class=instruction-delete-button data-delete-source '
                     f'aria-label="Propose deleting {h(source["path"])}">Delete draft</button>'
@@ -2261,6 +2296,8 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
             f'<article class=instruction-source-block id="{source_ids[source["path"]]}" data-instruction-source '
             f'data-source-path="{h(source["path"])}" data-source-hash="{h(digest)}" '
             f'data-source-directory="{h(parent)}" data-source-selectable="{str(source["selectable"]).lower()}" '
+            f'data-source-editable="{str(source["editable"]).lower()}" '
+            f'data-source-line-ending="{source["line_ending"]}" '
             f'data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
             f'<div><span class=instruction-scope data-source-scope>source</span><h3><code>{h(source["path"])}</code></h3></div>'
             f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span>{edit_button}{delete_button}</div></div>'
@@ -2361,6 +2398,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   let draftedSource = null;
   let draftOperation = "edit";
   let originalContent = "";
+  let editorOriginalContent = "";
   let draftDirty = false;
   let draftAffectedViews = [];
   let virtualSource = null;
@@ -2549,8 +2587,20 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   }
 
   function sourceText(source, useDraft) {
-    if (useDraft && source === draftedSource) return draftEditor.value;
+    if (useDraft && source === draftedSource) return draftContentForPatch();
     return source.querySelector("pre")?.textContent || "";
+  }
+
+  function editorText(content) {
+    return content.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
+  }
+
+  function draftContentForPatch() {
+    if (draftOperation === "delete") return "";
+    const value = draftEditor.value;
+    if (draftedSource?.dataset.sourceLineEnding === "crlf") return value.replace(/\\n/g, "\\r\\n");
+    if (draftedSource?.dataset.sourceLineEnding === "cr") return value.replace(/\\n/g, "\\r");
+    return value;
   }
 
   function effectiveText(view, useDraft, useBase) {
@@ -2613,7 +2663,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
 
   function buildUnifiedPatch() {
     if (!draftedSource) return "";
-    const after = draftEditor.value;
+    const after = draftContentForPatch();
     if (draftOperation === "edit" && after === originalContent) return "";
     if (draftOperation === "create" && !after.length) return "";
     const path = draftedSource.dataset.sourcePath;
@@ -2655,7 +2705,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   }
 
   function updatePatchExport() {
-    const draftBytes = new TextEncoder().encode(draftEditor.value).length;
+    const draftBytes = new TextEncoder().encode(draftContentForPatch()).length;
     if (draftBytes > maxDraftBytes) {
       currentPatch = "";
       patchPreview.textContent = `Patch unavailable: draft content exceeds the ${maxDraftBytes}-byte source limit.`;
@@ -2680,7 +2730,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
 
   function updateDraftPreview() {
     if (!draftedSource) return;
-    draftDirty = draftOperation !== "edit" || draftEditor.value !== originalContent;
+    draftDirty = draftOperation !== "edit" || draftEditor.value !== editorOriginalContent;
     applyDraftOverlay();
     draftedSource.classList.toggle("is-drafted", draftDirty);
     let pill = draftedSource.querySelector("[data-draft-pill]");
@@ -2702,7 +2752,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     } else {
       draftStatus.textContent = draftDirty ? "Unsaved local draft · stored only in this page" : "Draft matches the published source.";
     }
-    renderDiff(originalContent, draftEditor.value, sourceDiff);
+    renderDiff(editorOriginalContent, draftEditor.value, sourceDiff);
     const appliesHere = activeView && draftAffectedViews.includes(activeView);
     selectedImpact.textContent = appliesHere
       ? `Changes the effective repository instructions for ${selectedPath}.`
@@ -2765,6 +2815,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     draftedSource = null;
     draftOperation = "edit";
     originalContent = "";
+    editorOriginalContent = "";
     draftDirty = false;
     draftStale = false;
     currentPatch = "";
@@ -2790,7 +2841,8 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     draftStale = false;
     staleDraft.hidden = true;
     originalContent = operation === "create" ? "" : (source.querySelector("pre")?.textContent || "");
-    draftEditor.value = operation === "delete" ? "" : originalContent;
+    editorOriginalContent = editorText(originalContent);
+    draftEditor.value = operation === "delete" ? "" : editorOriginalContent;
     draftEditor.readOnly = operation === "delete";
     draftTitle.textContent = operation === "create" ? "Proposed source addition" :
       (operation === "delete" ? "Proposed source deletion" : "Local draft");
@@ -2824,6 +2876,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     source.dataset.sourceHash = "missing";
     source.dataset.sourceDirectory = sourceDirectory(path);
     source.dataset.sourceSelectable = "true";
+    source.dataset.sourceLineEnding = "lf";
     source.dataset.sourceMapped = "true";
     const heading = document.createElement("div");
     heading.className = "instruction-source-heading";
@@ -2885,7 +2938,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   }
 
   function applyFilter() {
-    const query = filter.value.trim().toLocaleLowerCase();
+    const query = filter.value.trim().toLowerCase();
     if (query && !filtering) {
       expansionSnapshot = new Map(nodes.map((node) => [node, node.getAttribute("aria-expanded")]));
       filtering = true;
@@ -2899,6 +2952,8 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         });
       }
       filtering = false;
+      const selectedNode = nodes.find((node) => node.getAttribute("aria-selected") === "true");
+      if (selectedNode) expandAncestors(selectedNode);
       repairTreeTabStop();
       empty.hidden = visibleNodes().length > 0;
       return;
@@ -4209,6 +4264,8 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     instruction_html = instruction_sources_body(
         instruction_report, {"backlog_ref": "main"}, "abcdef123456"
     )
+    assert pre_text_html("alpha\r\nbeta\r\n") == "&#10;alpha&#13;\nbeta&#13;\n"
+    assert pre_text_html("\nleading blank\n") == "&#10;\nleading blank\n"
     assert "&lt;script&gt;alert(&#x27;root&#x27;)&lt;/script&gt;" in instruction_html
     assert "<script>alert('root')</script>" not in instruction_html
     assert instruction_html.count("root &lt;script&gt;") == 1, "each source preview must render once"
@@ -4243,6 +4300,14 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert 'function repairTreeTabStop()' in instruction_html
     assert instruction_html.count("repairTreeTabStop();") == 2, (
         "filtering and clearing the filter must both restore a visible tree tab stop"
+    )
+    assert "toLocaleLowerCase" not in instruction_html
+    assert 'filter.value.trim().toLowerCase()' in instruction_html
+    restore_pos = instruction_html.index("expansionSnapshot.forEach")
+    expand_selected_pos = instruction_html.index("if (selectedNode) expandAncestors(selectedNode)")
+    repair_pos = instruction_html.index("repairTreeTabStop();", expand_selected_pos)
+    assert restore_pos < expand_selected_pos < repair_pos, (
+        "clearing a filter must restore the snapshot, then keep the selected path visible before repairing focus"
     )
     assert instruction_html.count("class=instruction-edit-button data-edit-source") == 4, (
         "only published sources used by an effective chain must be locally editable"
@@ -4280,7 +4345,9 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert 'patchPreview.textContent = currentPatch' in instruction_html
     assert "navigator.clipboard?.writeText" in instruction_html
     assert 'new Blob([currentPatch], { type: "text/x-diff;charset=utf-8" })' in instruction_html
-    assert "new TextEncoder().encode(draftEditor.value).length" in instruction_html
+    assert "new TextEncoder().encode(draftContentForPatch()).length" in instruction_html
+    assert "function draftContentForPatch()" in instruction_html
+    assert 'sourceLineEnding === "crlf"' in instruction_html
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",
@@ -4305,6 +4372,42 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "instructions_max_total_bytes": 4,
     }))
     assert any(finding["code"] == "total-bytes-limit" for finding in total_limited_report["findings"])
+    lint_budget_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "root rules\n",
+        "CLAUDE.md": "WRONG include\n",
+        "src/AGENTS.md": "shadow rules\n",
+        "src/AGENTS.override.md": "override!\n",
+        "src/CLAUDE.md": "@AGENTS.md\n",
+    }), instructions_settings({
+        "instructions_dir": ".",
+        "instructions_lint_claude_include": True,
+        "instructions_max_total_bytes": 40,
+    }))
+    assert any(
+        finding["code"] == "claude-include-mismatch" and finding["path"] == "CLAUDE.md"
+        for finding in lint_budget_report["findings"]
+    ), "shadowed preview candidates must not consume the lint source budget"
+    invalid_utf8_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": b"caf\xe9 rules\nline2\n",
+    }), instructions_settings({"instructions_dir": "."}))
+    invalid_utf8_source = invalid_utf8_report["sources"][0]
+    assert not invalid_utf8_source["editable"] and "\ufffd" in invalid_utf8_source["content"]
+    assert any(finding["code"] == "invalid-utf8" for finding in invalid_utf8_report["findings"])
+    invalid_utf8_html = instruction_sources_body(
+        invalid_utf8_report, {"backlog_ref": "main"}, "abcdef123456"
+    )
+    assert "class=instruction-edit-button data-edit-source" not in invalid_utf8_html
+    assert "class=instruction-delete-button data-delete-source" not in invalid_utf8_html
+    newline_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "alpha\r\nbeta\r\n",
+    }), instructions_settings({"instructions_dir": "."}))
+    assert newline_report["sources"][0]["editable"]
+    assert newline_report["sources"][0]["line_ending"] == "crlf"
+    mixed_newline_report = instruction_sources_report(_InstructionMemorySource({
+        "AGENTS.md": "alpha\r\nbeta\ngamma\r",
+    }), instructions_settings({"instructions_dir": "."}))
+    assert not mixed_newline_report["sources"][0]["editable"]
+    assert any(finding["code"] == "mixed-line-endings" for finding in mixed_newline_report["findings"])
     zero_candidate_report = instruction_sources_report(_InstructionMemorySource({
         "empty/AGENTS.md": "",
         "empty/main.py": "pass",
