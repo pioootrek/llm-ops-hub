@@ -242,8 +242,27 @@ from `data/index.json`.
 The editor compares the draft's base commit and source hash (or the expected
 absence of a newly proposed path) with the current `data/index.json` when
 possible, warns if the published release changed, and warns before leaving with
-an unsaved operation. Reloading or discarding loses the draft. Exporting a patch
-remains follow-on work.
+an unsaved operation. Reloading or discarding loses the draft.
+
+Every non-empty operation produces a standard unified diff with three lines of
+context. Its header records the base commit and either the source SHA-256 or
+that the path was absent. **Copy patch** uses the Clipboard API with a legacy
+copy fallback; **Download patch** creates a local `.patch` file in the browser.
+Both actions are disabled when the published base is stale. The patch contains
+no credential. Export is also blocked when draft content exceeds the configured
+`instructions_max_file_bytes` limit. Applying remains an explicit project-side
+action:
+
+```sh
+# First compare HEAD with the patch's "# base-commit:" header.
+git apply --check instruction-*.patch
+git apply instruction-*.patch
+# Then run the monitored project's documented fmt/validate commands.
+```
+
+The base header is review metadata; `git apply` does not enforce it. A
+machine-readable proposal format is intentionally deferred until a concrete
+consumer needs one.
 
 ## Human feedback
 

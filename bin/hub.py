@@ -612,6 +612,7 @@ def instruction_sources_report(repo_source, settings: dict[str, Any]) -> dict[st
         "profile": INSTRUCTIONS_PROFILE,
         "profile_as_of": INSTRUCTIONS_PROFILE_AS_OF,
         "dir": root,
+        "max_file_bytes": settings["max_file_bytes"],
         "directories": directory_records,
         "findings": findings,
         "sources": [source_records[path] for path in sorted(source_records)],
@@ -623,6 +624,7 @@ def instruction_sources_json(report: dict[str, Any]) -> dict[str, Any]:
         "profile": report["profile"],
         "profile_as_of": report["profile_as_of"],
         "dir": report["dir"],
+        "max_file_bytes": report["max_file_bytes"],
         "directories": report["directories"],
         "findings": report["findings"],
         "sources": [
@@ -1656,12 +1658,15 @@ CSS = (
     '.instruction-draft[hidden]{display:none}.instruction-draft-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.instruction-draft-header h2{margin:0 0 4px;font-size:17px}'
     '.instruction-draft-actions{display:flex;gap:7px;flex-wrap:wrap}.instruction-draft-actions button{border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:6px 9px;font:inherit;font-size:12px;font-weight:650;cursor:pointer}'
     '.instruction-draft-actions button:hover{background:var(--surface-hover)}.instruction-draft-actions button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-draft-actions button:disabled{opacity:.45;cursor:not-allowed;background:var(--surface)}'
     '.instruction-draft-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.42fr);gap:18px;margin-top:14px}.instruction-editor-label{display:grid;gap:6px;font-size:11px;font-weight:650;color:var(--label)}'
     '.instruction-editor{width:100%;min-height:330px;resize:vertical;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--foreground);padding:12px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}'
     '.instruction-editor:focus{outline:2px solid var(--ring);outline-offset:2px}.instruction-impact{border-left:1px solid var(--border);padding-left:18px}.instruction-impact h3{margin-top:0}'
     '.instruction-affected{max-height:190px;overflow:auto;margin:6px 0 0;padding-left:22px}.instruction-diff{margin-top:16px}.instruction-diff pre{max-height:360px;margin:6px 0 0;white-space:pre-wrap}'
     '.instruction-diff-line{display:block;min-height:1.55em}.instruction-diff-add{background:color-mix(in srgb,#238636 18%,transparent);color:var(--foreground)}.instruction-diff-remove{background:color-mix(in srgb,#da3633 16%,transparent);color:var(--foreground)}'
     '.instruction-draft-status{margin:8px 0 0}.instruction-stale-draft{margin-top:12px}.instruction-source-meta .draft-pill{color:var(--warn-fg);border-color:var(--warn-border)}'
+    '.instruction-patch{margin-top:18px;border-top:1px solid var(--border);padding-top:16px}.instruction-patch-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}'
+    '.instruction-patch-header h3{margin:0 0 4px}.instruction-patch pre{max-height:420px;margin:10px 0 0;white-space:pre;overflow:auto}.instruction-export-status{min-height:1.4em;margin:7px 0 0}'
     'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
     '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
@@ -2287,10 +2292,13 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=true tabindex=0>Sources</button>'
         '<button class=instruction-tab id=instruction-tab-delta type=button role=tab data-instruction-tab=delta aria-selected=false tabindex=-1>Changes</button>'
         '</div></div></div>' + "".join(directory_views) + '</section></div>'
-        + f'<section class=instruction-draft data-instruction-draft data-base-commit="{h(commit)}" hidden>'
+        + f'<section class=instruction-draft data-instruction-draft data-base-commit="{h(commit)}" '
+        f'data-max-file-bytes="{report["max_file_bytes"]}" hidden>'
         '<div class=instruction-draft-header><div><h2 data-draft-title>Local draft</h2>'
         '<p class=muted>Edit one concrete source in page memory. Nothing is saved to the repository.</p></div>'
-        '<div class=instruction-draft-actions><button type=button data-discard-draft>Discard draft</button></div></div>'
+        '<div class=instruction-draft-actions><button type=button data-copy-patch disabled>Copy patch</button>'
+        '<button type=button data-download-patch disabled>Download patch</button>'
+        '<button type=button data-discard-draft>Discard draft</button></div></div>'
         '<div class="warn instruction-stale-draft" data-stale-draft role=alert hidden><strong>Stale base.</strong> '
         'The published commit or source hash changed. Discard this draft and review the current source before continuing.</div>'
         '<div class=instruction-draft-grid><div><label class=instruction-editor-label><span data-editor-label>Source content</span>'
@@ -2301,6 +2309,9 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<details><summary>Show affected directories</summary><ol class=instruction-affected data-affected-directories></ol></details></aside></div>'
         '<div class=instruction-diff><h3>Source diff</h3><pre data-source-diff></pre></div>'
         '<div class=instruction-diff><h3>Selected-directory effective diff</h3><pre data-effective-diff></pre></div>'
+        '<section class=instruction-patch><div class=instruction-patch-header><div><h3>Portable patch</h3>'
+        '<p class=muted>Standard unified diff with the immutable base recorded in its header.</p></div></div>'
+        '<pre data-patch-preview tabindex=0></pre><p class="muted instruction-export-status" data-export-status role=status></p></section>'
         '</section>'
         + findings_card
         + '<section class=instruction-source-library data-source-library><h2 data-source-library-title>Sources</h2>'
@@ -2337,6 +2348,10 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   const addSourceButton = document.querySelector("[data-add-source]");
   const draftTitle = document.querySelector("[data-draft-title]");
   const editorLabel = document.querySelector("[data-editor-label]");
+  const patchPreview = document.querySelector("[data-patch-preview]");
+  const copyPatchButton = document.querySelector("[data-copy-patch]");
+  const downloadPatchButton = document.querySelector("[data-download-patch]");
+  const exportStatus = document.querySelector("[data-export-status]");
   if (!tree || !nodes.length || !views.length || !sourceLibrary || !sourceStorage || !orphanContainer) return;
 
   let selectedPath = "";
@@ -2349,6 +2364,9 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   let draftDirty = false;
   let draftAffectedViews = [];
   let virtualSource = null;
+  let draftStale = false;
+  let currentPatch = "";
+  const maxDraftBytes = Number(draftPanel.dataset.maxFileBytes);
   views.forEach((view) => { view.dataset.baseSourceIds = view.dataset.sourceIds; });
   const orphanSources = sourceNodes.filter((source) => source.dataset.sourceMapped !== "true");
   sourceLibrary.hidden = orphanSources.length === 0;
@@ -2574,6 +2592,88 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     if (suffixLines.length > 3) addDiffLine(target, "", `… ${suffixLines.length - 3} unchanged line(s) …`, "muted");
   }
 
+  function quoteGitPath(path) {
+    if (new RegExp("^[A-Za-z0-9._/-]+$").test(path)) return path;
+    return JSON.stringify(path);
+  }
+
+  function patchTokens(text) {
+    if (!text.length) return [];
+    const parts = text.split("\\n");
+    const tokens = parts.slice(0, -1).map((line) => line + "\\n");
+    if (parts[parts.length - 1]) tokens.push(parts[parts.length - 1]);
+    return tokens;
+  }
+
+  function appendPatchToken(target, marker, token) {
+    const hasNewline = token.endsWith("\\n");
+    target.push(marker + (hasNewline ? token.slice(0, -1) : token));
+    if (!hasNewline) target.push("\\\\ No newline at end of file");
+  }
+
+  function buildUnifiedPatch() {
+    if (!draftedSource) return "";
+    const after = draftEditor.value;
+    if (draftOperation === "edit" && after === originalContent) return "";
+    if (draftOperation === "create" && !after.length) return "";
+    const path = draftedSource.dataset.sourcePath;
+    const aPath = quoteGitPath(`a/${path}`);
+    const bPath = quoteGitPath(`b/${path}`);
+    const oldTokens = patchTokens(originalContent);
+    const newTokens = patchTokens(after);
+    let prefix = 0;
+    while (prefix < oldTokens.length && prefix < newTokens.length && oldTokens[prefix] === newTokens[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < oldTokens.length - prefix && suffix < newTokens.length - prefix &&
+           oldTokens[oldTokens.length - 1 - suffix] === newTokens[newTokens.length - 1 - suffix]) suffix += 1;
+    const contextBefore = Math.min(3, prefix);
+    const contextAfter = Math.min(3, suffix);
+    const oldChangeEnd = oldTokens.length - suffix;
+    const newChangeEnd = newTokens.length - suffix;
+    const oldHunkStart = prefix - contextBefore;
+    const newHunkStart = prefix - contextBefore;
+    const oldCount = contextBefore + (oldChangeEnd - prefix) + contextAfter;
+    const newCount = contextBefore + (newChangeEnd - prefix) + contextAfter;
+    const lines = [
+      "# LLM Ops Hub instruction proposal",
+      `# base-commit: ${draftPanel.dataset.baseCommit}`,
+      `# source-sha256: ${draftOperation === "create" ? "absent" : draftedSource.dataset.sourceHash}`,
+      `diff --git ${aPath} ${bPath}`,
+    ];
+    if (draftOperation === "create") lines.push("new file mode 100644");
+    if (draftOperation === "delete") lines.push("deleted file mode 100644");
+    lines.push(draftOperation === "create" ? "--- /dev/null" : `--- ${aPath}`);
+    lines.push(draftOperation === "delete" ? "+++ /dev/null" : `+++ ${bPath}`);
+    const oldStart = oldCount ? oldHunkStart + 1 : 0;
+    const newStart = newCount ? newHunkStart + 1 : 0;
+    lines.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    oldTokens.slice(oldHunkStart, prefix).forEach((token) => appendPatchToken(lines, " ", token));
+    oldTokens.slice(prefix, oldChangeEnd).forEach((token) => appendPatchToken(lines, "-", token));
+    newTokens.slice(prefix, newChangeEnd).forEach((token) => appendPatchToken(lines, "+", token));
+    oldTokens.slice(oldChangeEnd, oldChangeEnd + contextAfter).forEach((token) => appendPatchToken(lines, " ", token));
+    return lines.join("\\n") + "\\n";
+  }
+
+  function updatePatchExport() {
+    const draftBytes = new TextEncoder().encode(draftEditor.value).length;
+    if (draftBytes > maxDraftBytes) {
+      currentPatch = "";
+      patchPreview.textContent = `Patch unavailable: draft content exceeds the ${maxDraftBytes}-byte source limit.`;
+      copyPatchButton.disabled = true;
+      downloadPatchButton.disabled = true;
+      exportStatus.textContent = `Export blocked: draft content is ${draftBytes} bytes.`;
+      return;
+    }
+    currentPatch = buildUnifiedPatch();
+    patchPreview.textContent = currentPatch || "Make a content change to generate a patch.";
+    const blocked = !currentPatch || draftStale;
+    copyPatchButton.disabled = blocked;
+    downloadPatchButton.disabled = blocked;
+    exportStatus.textContent = draftStale
+      ? "Export blocked: the published base changed. Discard this draft and review the current source."
+      : (currentPatch ? "Ready to copy or download." : "No exportable change yet.");
+  }
+
   function affectedViews() {
     return draftedSource ? draftAffectedViews : [];
   }
@@ -2624,20 +2724,26 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         affectedList.append(item);
       });
     }
+    updatePatchExport();
   }
 
   async function checkDraftBase() {
     if (!draftedSource) return;
+    const checkedSource = draftedSource;
+    const checkedOperation = draftOperation;
     try {
       const response = await fetch("data/index.json", { cache: "no-store" });
       if (!response.ok) return;
       const current = await response.json();
-      const currentSource = current.instructions?.sources?.find((source) => source.path === draftedSource.dataset.sourcePath);
-      const sourceMismatch = draftOperation === "create"
+      if (draftedSource !== checkedSource || draftOperation !== checkedOperation) return;
+      const currentSource = current.instructions?.sources?.find((source) => source.path === checkedSource.dataset.sourcePath);
+      const sourceMismatch = checkedOperation === "create"
         ? Boolean(currentSource)
-        : !currentSource || currentSource.sha256 !== draftedSource.dataset.sourceHash;
+        : !currentSource || currentSource.sha256 !== checkedSource.dataset.sourceHash;
       const mismatched = current.commit !== draftPanel.dataset.baseCommit || sourceMismatch;
+      draftStale = mismatched;
       staleDraft.hidden = !mismatched;
+      updatePatchExport();
     } catch (_error) {
       // Offline and file:// views remain editable; provenance stays visible in the page.
     }
@@ -2660,11 +2766,17 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     draftOperation = "edit";
     originalContent = "";
     draftDirty = false;
+    draftStale = false;
+    currentPatch = "";
     draftAffectedViews = [];
     delete affectedList.dataset.sourceId;
     draftEditor.value = "";
     draftPanel.hidden = true;
     staleDraft.hidden = true;
+    patchPreview.textContent = "";
+    exportStatus.textContent = "";
+    copyPatchButton.disabled = true;
+    downloadPatchButton.disabled = true;
     draftEditor.readOnly = false;
     const activeView = viewByPath.get(selectedPath);
     if (activeView) renderEffective(activeView);
@@ -2675,6 +2787,8 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   function configureDraft(source, operation) {
     draftedSource = source;
     draftOperation = operation;
+    draftStale = false;
+    staleDraft.hidden = true;
     originalContent = operation === "create" ? "" : (source.querySelector("pre")?.textContent || "");
     draftEditor.value = operation === "delete" ? "" : originalContent;
     draftEditor.readOnly = operation === "delete";
@@ -2873,6 +2987,40 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     requestAnimationFrame(() => document.querySelector(link.getAttribute("href"))?.scrollIntoView({ block: "start" }));
   });
   addSourceButton?.addEventListener("click", startCreateDraft);
+  copyPatchButton?.addEventListener("click", async () => {
+    if (!currentPatch || draftStale) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(currentPatch);
+      else throw new Error("Clipboard API unavailable");
+      exportStatus.textContent = "Patch copied to the clipboard.";
+    } catch (_error) {
+      const fallback = document.createElement("textarea");
+      fallback.value = currentPatch;
+      fallback.setAttribute("readonly", "");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.append(fallback);
+      fallback.select();
+      const copied = document.execCommand("copy");
+      fallback.remove();
+      exportStatus.textContent = copied
+        ? "Patch copied to the clipboard." : "Copy was unavailable. Select the visible patch and copy it manually.";
+    }
+  });
+  downloadPatchButton?.addEventListener("click", () => {
+    if (!currentPatch || draftStale || !draftedSource) return;
+    const filenamePart = draftedSource.dataset.sourcePath.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-|-$/g, "");
+    const blob = new Blob([currentPatch], { type: "text/x-diff;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `instruction-${draftOperation}-${filenamePart || "change"}.patch`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    exportStatus.textContent = `Downloaded ${link.download}.`;
+  });
   draftEditor?.addEventListener("input", updateDraftPreview);
   document.querySelector("[data-discard-draft]")?.addEventListener("click", () => discardDraft(true));
   window.addEventListener("beforeunload", (event) => {
@@ -4054,6 +4202,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     finding_codes = {finding["code"] for finding in instruction_report["findings"]}
     assert {"symlink", "claude-include-mismatch", "claude-include-missing"} <= finding_codes
     public_instruction_report = instruction_sources_json(instruction_report)
+    assert public_instruction_report["max_file_bytes"] == INSTRUCTIONS_MAX_FILE_BYTES_DEFAULT
     assert all("content" not in source for source in public_instruction_report["sources"]), (
         "data/index.json must never publish instruction text"
     )
@@ -4114,7 +4263,7 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     )
     assert "innerHTML" not in instruction_html, "draft and explorer paths must not inject HTML"
     assert "function affectedViews()" in instruction_html
-    assert "currentSource.sha256 !== draftedSource.dataset.sourceHash" in instruction_html
+    assert "currentSource.sha256 !== checkedSource.dataset.sourceHash" in instruction_html
     assert 'draftOperation === "create"' in instruction_html
     assert "function applyDraftOverlay()" in instruction_html
     assert "function fallbackFor(source)" in instruction_html
@@ -4122,6 +4271,16 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert "source.dataset.sourcePath = path;" in instruction_html
     assert 'code.textContent = path;' in instruction_html
     assert 'draftedSource.querySelector("pre").textContent = draftEditor.value;' in instruction_html
+    assert "data-copy-patch disabled" in instruction_html
+    assert "data-download-patch disabled" in instruction_html
+    assert 'data-max-file-bytes="65536"' in instruction_html
+    assert "function buildUnifiedPatch()" in instruction_html
+    assert '`diff --git ${aPath} ${bPath}`' in instruction_html
+    assert '\\\\ No newline at end of file' in instruction_html
+    assert 'patchPreview.textContent = currentPatch' in instruction_html
+    assert "navigator.clipboard?.writeText" in instruction_html
+    assert 'new Blob([currentPatch], { type: "text/x-diff;charset=utf-8" })' in instruction_html
+    assert "new TextEncoder().encode(draftEditor.value).length" in instruction_html
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",
