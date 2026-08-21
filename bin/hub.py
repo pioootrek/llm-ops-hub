@@ -1635,7 +1635,7 @@ CSS = (
     '.instruction-source-block pre{margin:0}.instruction-scope{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:700}'
     '.instruction-order{margin:0;padding-left:25px}.instruction-order li{padding:7px 0;border-bottom:1px solid var(--border)}'
     '.instruction-order li:last-child{border-bottom:0}.instruction-delta{margin:0;padding:0;list-style:none}.instruction-delta li{padding:8px 0;border-bottom:1px solid var(--border)}'
-    '.instruction-delta li:last-child{border-bottom:0}.instruction-source-library{margin-top:14px}.js .instruction-source-library{display:none}'
+    '.instruction-delta li:last-child{border-bottom:0}.instruction-source-library{margin-top:14px}.js .instruction-source-storage{display:none}'
     'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
     '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
@@ -2070,6 +2070,11 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         for source in report["sources"]
     }
     directories = report["directories"]
+    mapped_source_paths = {
+        source["path"]
+        for directory in directories
+        for source in directory["sources"]
+    }
     records_by_path = {directory["path"]: directory for directory in directories}
     root = report["dir"]
     children: dict[str, list[str]] = {path: [] for path in records_by_path}
@@ -2110,11 +2115,13 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
             label = "issue" if count == 1 else "issues"
             badges += f'<span class="instruction-tree-badge warn-badge" aria-hidden=true>{count} {label}</span>'
         expanded_attr = f' aria-expanded="{str(expanded).lower()}"' if has_children else ""
+        selected = path == root
         label = root if path == root else PurePosixPath(path).name
         return (
             '<li role=none>'
             f'<button type=button class=instruction-tree-node role=treeitem data-tree-node data-instruction-dir="{h(path)}" '
-            f'data-search="{h(path.casefold())}" aria-level="{level}" aria-selected="false" tabindex="-1"{expanded_attr}>'
+            f'data-search="{h(path.casefold())}" aria-level="{level}" aria-selected="{str(selected).lower()}" '
+            f'tabindex="{0 if selected else -1}"{expanded_attr}>'
             f'<span class="instruction-tree-chevron{"" if has_children else " empty"}" data-tree-toggle aria-hidden=true></span>'
             f'<span class=instruction-tree-label>{h(label)}</span>{badges}</button>'
         )
@@ -2174,9 +2181,9 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         directory_views.append(
             f'<section class=instruction-directory-view data-instruction-view="{h(path)}" data-source-ids="{h(source_id_list)}"'
             + ("" if index == 0 else " hidden") + ">"
-            f'<div class=instruction-panel role=tabpanel data-instruction-panel=effective id={effective_id} aria-labelledby=instruction-tab-effective>'
+            f'<div class=instruction-panel role=tabpanel data-instruction-panel=effective id={effective_id} aria-labelledby=instruction-tab-effective hidden>'
             f'<div class=instruction-effective>{empty if not links else ""}</div></div>'
-            f'<div class=instruction-panel role=tabpanel data-instruction-panel=sources id={sources_id} aria-labelledby=instruction-tab-sources hidden>'
+            f'<div class=instruction-panel role=tabpanel data-instruction-panel=sources id={sources_id} aria-labelledby=instruction-tab-sources>'
             + (f'<ol class=instruction-order>{"".join(links)}</ol>' if links else empty)
             + '<p class=muted>Root sources appear first. This is discovery order, not semantic conflict analysis.</p></div>'
             f'<div class=instruction-panel role=tabpanel data-instruction-panel=delta id={delta_id} aria-labelledby=instruction-tab-delta hidden>{delta}</div></section>'
@@ -2190,7 +2197,8 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         + (f'<ul>{findings}</ul>' if findings else '<p class=muted>No report findings.</p>')
         + "</section>"
     )
-    previews = []
+    mapped_previews = []
+    orphan_previews = []
     for source in report["sources"]:
         digest = source["sha256"] or "unavailable"
         parent = source_directory(source["path"])
@@ -2199,13 +2207,15 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         else:
             content = f'<pre>{h(source["content"])}</pre>'
         kind = "override" if PurePosixPath(source["path"]).name == "AGENTS.override.md" else "source"
-        previews.append(
+        mapped = source["path"] in mapped_source_paths
+        preview = (
             f'<article class=instruction-source-block id="{source_ids[source["path"]]}" data-instruction-source '
-            f'data-source-directory="{h(parent)}"><div class=instruction-source-heading>'
+            f'data-source-directory="{h(parent)}" data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
             f'<div><span class=instruction-scope data-source-scope>source</span><h3><code>{h(source["path"])}</code></h3></div>'
             f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span></div></div>'
             f'<p class=muted>sha256 <code>{h(digest)}</code></p>{content}</article>'
         )
+        (mapped_previews if mapped else orphan_previews).append(preview)
     return (
         '<div class=page-heading><div><h1>Repository instruction sources</h1>'
         f'<p class=muted>Report for <code>{h(report["dir"])}</code> at '
@@ -2226,14 +2236,17 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<section class=instruction-workspace><div class=instruction-workspace-header><div>'
         f'<h2 data-selected-directory>{h(root)}</h2><p class=muted data-selected-summary role=status>Repository-visible instruction sources</p></div>'
         '<div class=instruction-tabs role=tablist aria-label="Instruction view">'
-        '<button class=instruction-tab id=instruction-tab-effective type=button role=tab data-instruction-tab=effective aria-selected=true tabindex=0>Effective</button>'
-        '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=false tabindex=-1>Sources</button>'
+        '<button class=instruction-tab id=instruction-tab-effective type=button role=tab data-instruction-tab=effective aria-selected=false tabindex=-1>Effective</button>'
+        '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=true tabindex=0>Sources</button>'
         '<button class=instruction-tab id=instruction-tab-delta type=button role=tab data-instruction-tab=delta aria-selected=false tabindex=-1>Changes</button>'
         '</div></div>' + "".join(directory_views) + '</section></div>'
         + findings_card
-        + '<section class=instruction-source-library data-source-library><h2>Sources</h2>'
-        '<p class=muted>Each source is rendered once. Enable JavaScript to browse effective directory chains.</p>'
-        + ("".join(previews) if previews else '<p class=muted>No instruction sources found.</p>') + '</section>'
+        + '<section class=instruction-source-library data-source-library><h2 data-source-library-title>Sources</h2>'
+        '<p class=muted data-source-library-note>Each source is rendered once. Enable JavaScript to browse effective directory chains.</p>'
+        '<div class=instruction-source-storage data-source-storage>'
+        + "".join(mapped_previews) + '</div><div data-orphan-sources>'
+        + ("".join(orphan_previews) if orphan_previews else '<p class=muted data-no-orphan-sources>No other instruction sources found.</p>')
+        + '</div></section>'
         + """
 <script>
 (function () {
@@ -2245,15 +2258,24 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   const filter = document.getElementById("instruction-filter");
   const empty = document.querySelector("[data-tree-empty]");
   const sourceLibrary = document.querySelector("[data-source-library]");
+  const sourceStorage = document.querySelector("[data-source-storage]");
+  const orphanContainer = document.querySelector("[data-orphan-sources]");
   const sourceNodes = Array.from(document.querySelectorAll("[data-instruction-source]"));
   const sourceById = new Map(sourceNodes.map((source) => [source.id, source]));
   const viewByPath = new Map(views.map((view) => [view.dataset.instructionView, view]));
-  if (!tree || !nodes.length || !views.length || !sourceLibrary) return;
+  if (!tree || !nodes.length || !views.length || !sourceLibrary || !sourceStorage || !orphanContainer) return;
 
   let selectedPath = "";
   let activePanel = "effective";
   let filtering = false;
   let expansionSnapshot = new Map();
+  const orphanSources = sourceNodes.filter((source) => source.dataset.sourceMapped !== "true");
+  sourceLibrary.hidden = orphanSources.length === 0;
+  if (orphanSources.length) {
+    sourceLibrary.querySelector("[data-source-library-title]").textContent = "Other discovered sources";
+    sourceLibrary.querySelector("[data-source-library-note]").textContent =
+      "These sources were discovered for lint or diagnostics but are not part of any directory's effective chain.";
+  }
 
   function groupFor(node) {
     return Array.from(node.parentElement.children).find((child) => child.getAttribute("role") === "group") || null;
@@ -2277,13 +2299,14 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
 
   function isVisible(node) {
     let item = node.parentElement;
-    while (item && item !== tree) {
+    while (item) {
       if (item.hidden) return false;
       const group = item.parentElement;
-      if (group && group.getAttribute("role") === "group" && group.hidden) return false;
-      item = group ? group.parentElement : null;
+      if (group === tree) return true;
+      if (!group || group.getAttribute("role") !== "group" || group.hidden) return false;
+      item = group.parentElement;
     }
-    return true;
+    return false;
   }
 
   function visibleNodes() {
@@ -2293,6 +2316,15 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   function focusNode(node, moveFocus = true) {
     nodes.forEach((candidate) => { candidate.tabIndex = candidate === node ? 0 : -1; });
     if (moveFocus) node.focus();
+  }
+
+  function repairTreeTabStop() {
+    const visible = visibleNodes();
+    const selected = visible.find((node) => node.getAttribute("aria-selected") === "true");
+    const current = visible.find((node) => node.tabIndex === 0);
+    const next = selected || current || visible[0];
+    if (next) focusNode(next, false);
+    else nodes.forEach((node) => { node.tabIndex = -1; });
   }
 
   function setPanel(panel, updateUrl) {
@@ -2316,9 +2348,19 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   }
 
   function renderEffective(view) {
-    sourceNodes.forEach((source) => sourceLibrary.append(source));
+    sourceNodes.forEach((source) => {
+      const home = source.dataset.sourceMapped === "true" ? sourceStorage : orphanContainer;
+      home.append(source);
+    });
     const target = view.querySelector(".instruction-effective");
+    target.replaceChildren();
     const ids = view.dataset.sourceIds.split(" ").filter(Boolean);
+    if (!ids.length) {
+      const message = document.createElement("p");
+      message.className = "muted";
+      message.textContent = "No profile source applies to this directory.";
+      target.append(message);
+    }
     ids.forEach((id) => {
       const source = sourceById.get(id);
       if (!source) return;
@@ -2366,6 +2408,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         });
       }
       filtering = false;
+      repairTreeTabStop();
       empty.hidden = visibleNodes().length > 0;
       return;
     }
@@ -2379,6 +2422,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
       item.hidden = !matched;
       if (group && matched) setExpanded(node, childMatch);
     });
+    repairTreeTabStop();
     empty.hidden = visibleNodes().length > 0;
   }
 
@@ -3632,6 +3676,25 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert 'event.key === "Home"' in instruction_html
     assert '<select id=instruction-directory>' not in instruction_html
     assert "src/api/AGENTS.override.md" in instruction_html and "added here" in instruction_html
+    assert instruction_html.count('data-source-mapped="false"') == 3, (
+        "lint and omitted sources outside every effective chain must remain identifiable"
+    )
+    assert '.js .instruction-source-storage{display:none}' in CSS
+    assert '.js .instruction-source-library{display:none}' not in CSS, (
+        "JavaScript must not hide sources used by lint findings and diagnostics"
+    )
+    assert 'sourceLibrary.hidden = orphanSources.length === 0;' in instruction_html
+    assert 'aria-labelledby=instruction-tab-sources><ol class=instruction-order>' in instruction_html, (
+        "the initial source order must remain visible without JavaScript"
+    )
+    assert 'data-instruction-tab=sources aria-selected=true tabindex=0' in instruction_html
+    assert 'if (group === tree) return true;' in instruction_html, (
+        "tree visibility checks must stop at the tree root"
+    )
+    assert 'function repairTreeTabStop()' in instruction_html
+    assert instruction_html.count("repairTreeTabStop();") == 2, (
+        "filtering and clearing the filter must both restore a visible tree tab stop"
+    )
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",
