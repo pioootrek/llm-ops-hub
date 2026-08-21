@@ -1636,12 +1636,26 @@ CSS = (
     '.instruction-order{margin:0;padding-left:25px}.instruction-order li{padding:7px 0;border-bottom:1px solid var(--border)}'
     '.instruction-order li:last-child{border-bottom:0}.instruction-delta{margin:0;padding:0;list-style:none}.instruction-delta li{padding:8px 0;border-bottom:1px solid var(--border)}'
     '.instruction-delta li:last-child{border-bottom:0}.instruction-source-library{margin-top:14px}.js .instruction-source-storage{display:none}'
+    '.instruction-edit-button{display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:5px 8px;font:inherit;font-size:11px;font-weight:650;cursor:pointer}.js .instruction-edit-button{display:inline-block}'
+    '.instruction-edit-button:hover{background:var(--surface-hover)}.instruction-edit-button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-source-block.is-drafted{box-shadow:inset 3px 0 0 var(--ring);padding-left:12px}.instruction-draft{margin-top:14px;border-top:1px solid var(--border);padding-top:18px}'
+    '.instruction-draft[hidden]{display:none}.instruction-draft-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.instruction-draft-header h2{margin:0 0 4px;font-size:17px}'
+    '.instruction-draft-actions{display:flex;gap:7px;flex-wrap:wrap}.instruction-draft-actions button{border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--foreground);padding:6px 9px;font:inherit;font-size:12px;font-weight:650;cursor:pointer}'
+    '.instruction-draft-actions button:hover{background:var(--surface-hover)}.instruction-draft-actions button:focus-visible{outline:2px solid var(--ring);outline-offset:2px}'
+    '.instruction-draft-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.42fr);gap:18px;margin-top:14px}.instruction-editor-label{display:grid;gap:6px;font-size:11px;font-weight:650;color:var(--label)}'
+    '.instruction-editor{width:100%;min-height:330px;resize:vertical;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--foreground);padding:12px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}'
+    '.instruction-editor:focus{outline:2px solid var(--ring);outline-offset:2px}.instruction-impact{border-left:1px solid var(--border);padding-left:18px}.instruction-impact h3{margin-top:0}'
+    '.instruction-affected{max-height:190px;overflow:auto;margin:6px 0 0;padding-left:22px}.instruction-diff{margin-top:16px}.instruction-diff pre{max-height:360px;margin:6px 0 0;white-space:pre-wrap}'
+    '.instruction-diff-line{display:block;min-height:1.55em}.instruction-diff-add{background:color-mix(in srgb,#238636 18%,transparent);color:var(--foreground)}.instruction-diff-remove{background:color-mix(in srgb,#da3633 16%,transparent);color:var(--foreground)}'
+    '.instruction-draft-status{margin:8px 0 0}.instruction-stale-draft{margin-top:12px}.instruction-source-meta .draft-pill{color:var(--warn-fg);border-color:var(--warn-border)}'
     'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
     '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
     '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}'
     '.instruction-explorer{grid-template-columns:1fr}.instruction-navigator{border-right:0;border-bottom:1px solid var(--border)}'
-    '.instruction-tree-scroll{max-height:300px}.instruction-workspace-header{display:block}.instruction-tabs{margin-top:12px}}'
+    '.instruction-tree-scroll{max-height:300px}.instruction-workspace-header{display:block}.instruction-tabs{margin-top:12px}.instruction-draft-grid{grid-template-columns:1fr}.instruction-impact{border-left:0;border-top:1px solid var(--border);padding:14px 0 0}}'
+    '@media(prefers-reduced-motion:no-preference){.instruction-draft:not([hidden]){animation:instruction-draft-in .16s ease-out}.instruction-source-block{transition:box-shadow .15s ease,padding-left .15s ease}}'
+    '@keyframes instruction-draft-in{from{opacity:.4;transform:translateY(-4px)}to{opacity:1;transform:none}}'
 )
 
 
@@ -2208,11 +2222,18 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
             content = f'<pre>{h(source["content"])}</pre>'
         kind = "override" if PurePosixPath(source["path"]).name == "AGENTS.override.md" else "source"
         mapped = source["path"] in mapped_source_paths
+        edit_button = ""
+        if source["content"] is not None and mapped:
+            edit_button = (
+                f'<button type=button class=instruction-edit-button data-edit-source '
+                f'aria-label="Edit {h(source["path"])}">Edit draft</button>'
+            )
         preview = (
             f'<article class=instruction-source-block id="{source_ids[source["path"]]}" data-instruction-source '
+            f'data-source-path="{h(source["path"])}" data-source-hash="{h(digest)}" '
             f'data-source-directory="{h(parent)}" data-source-mapped="{str(mapped).lower()}"><div class=instruction-source-heading>'
             f'<div><span class=instruction-scope data-source-scope>source</span><h3><code>{h(source["path"])}</code></h3></div>'
-            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span></div></div>'
+            f'<div class=instruction-source-meta><span class=pill>{h(kind)}</span><span class=pill>{source["bytes"]} bytes</span>{edit_button}</div></div>'
             f'<p class=muted>sha256 <code>{h(digest)}</code></p>{content}</article>'
         )
         (mapped_previews if mapped else orphan_previews).append(preview)
@@ -2240,6 +2261,21 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
         '<button class=instruction-tab id=instruction-tab-sources type=button role=tab data-instruction-tab=sources aria-selected=true tabindex=0>Sources</button>'
         '<button class=instruction-tab id=instruction-tab-delta type=button role=tab data-instruction-tab=delta aria-selected=false tabindex=-1>Changes</button>'
         '</div></div>' + "".join(directory_views) + '</section></div>'
+        + f'<section class=instruction-draft data-instruction-draft data-base-commit="{h(commit)}" hidden>'
+        '<div class=instruction-draft-header><div><h2>Local draft</h2>'
+        '<p class=muted>Edit one concrete source in page memory. Nothing is saved to the repository.</p></div>'
+        '<div class=instruction-draft-actions><button type=button data-discard-draft>Discard draft</button></div></div>'
+        '<div class="warn instruction-stale-draft" data-stale-draft role=alert hidden><strong>Stale base.</strong> '
+        'The published commit or source hash changed. Discard this draft and review the current source before continuing.</div>'
+        '<div class=instruction-draft-grid><div><label class=instruction-editor-label>Source content'
+        '<textarea class=instruction-editor data-draft-editor spellcheck=false></textarea></label>'
+        '<p class="muted instruction-draft-status" data-draft-status role=status></p></div>'
+        '<aside class=instruction-impact aria-label="Draft impact"><h3>Deterministic impact</h3>'
+        '<p data-selected-impact></p><p><strong data-affected-count>0 directories</strong> use this source.</p>'
+        '<details><summary>Show affected directories</summary><ol class=instruction-affected data-affected-directories></ol></details></aside></div>'
+        '<div class=instruction-diff><h3>Source diff</h3><pre data-source-diff></pre></div>'
+        '<div class=instruction-diff><h3>Selected-directory effective diff</h3><pre data-effective-diff></pre></div>'
+        '</section>'
         + findings_card
         + '<section class=instruction-source-library data-source-library><h2 data-source-library-title>Sources</h2>'
         '<p class=muted data-source-library-note>Each source is rendered once. Enable JavaScript to browse effective directory chains.</p>'
@@ -2263,12 +2299,25 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   const sourceNodes = Array.from(document.querySelectorAll("[data-instruction-source]"));
   const sourceById = new Map(sourceNodes.map((source) => [source.id, source]));
   const viewByPath = new Map(views.map((view) => [view.dataset.instructionView, view]));
+  const draftPanel = document.querySelector("[data-instruction-draft]");
+  const draftEditor = document.querySelector("[data-draft-editor]");
+  const draftStatus = document.querySelector("[data-draft-status]");
+  const sourceDiff = document.querySelector("[data-source-diff]");
+  const effectiveDiff = document.querySelector("[data-effective-diff]");
+  const selectedImpact = document.querySelector("[data-selected-impact]");
+  const affectedCount = document.querySelector("[data-affected-count]");
+  const affectedList = document.querySelector("[data-affected-directories]");
+  const staleDraft = document.querySelector("[data-stale-draft]");
   if (!tree || !nodes.length || !views.length || !sourceLibrary || !sourceStorage || !orphanContainer) return;
 
   let selectedPath = "";
   let activePanel = "effective";
   let filtering = false;
   let expansionSnapshot = new Map();
+  let draftedSource = null;
+  let originalContent = "";
+  let draftDirty = false;
+  let draftAffectedViews = [];
   const orphanSources = sourceNodes.filter((source) => source.dataset.sourceMapped !== "true");
   sourceLibrary.hidden = orphanSources.length === 0;
   if (orphanSources.length) {
@@ -2370,6 +2419,140 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     });
   }
 
+  function sourceText(source, useDraft) {
+    if (useDraft && source === draftedSource) return draftEditor.value;
+    return source.querySelector("pre")?.textContent || "";
+  }
+
+  function effectiveText(view, useDraft) {
+    const ids = view.dataset.sourceIds.split(" ").filter(Boolean);
+    return ids.map((id) => {
+      const source = sourceById.get(id);
+      if (!source) return "";
+      return `===== ${source.dataset.sourcePath} =====\\n${sourceText(source, useDraft)}`;
+    }).join("\\n\\n");
+  }
+
+  function addDiffLine(target, marker, line, className) {
+    const span = document.createElement("span");
+    span.className = `instruction-diff-line ${className || ""}`;
+    span.textContent = marker + line;
+    target.append(span);
+  }
+
+  function renderDiff(before, after, target) {
+    target.replaceChildren();
+    if (before === after) {
+      addDiffLine(target, "", "No changes.", "muted");
+      return;
+    }
+    const oldLines = before.split("\\n");
+    const newLines = after.split("\\n");
+    let prefix = 0;
+    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix &&
+           oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix += 1;
+    const contextStart = Math.max(0, prefix - 3);
+    if (contextStart > 0) addDiffLine(target, "", `… ${contextStart} unchanged line(s) …`, "muted");
+    oldLines.slice(contextStart, prefix).forEach((line) => addDiffLine(target, "  ", line, ""));
+    oldLines.slice(prefix, oldLines.length - suffix).forEach((line) => addDiffLine(target, "- ", line, "instruction-diff-remove"));
+    newLines.slice(prefix, newLines.length - suffix).forEach((line) => addDiffLine(target, "+ ", line, "instruction-diff-add"));
+    const suffixLines = oldLines.slice(oldLines.length - suffix);
+    suffixLines.slice(0, 3).forEach((line) => addDiffLine(target, "  ", line, ""));
+    if (suffixLines.length > 3) addDiffLine(target, "", `… ${suffixLines.length - 3} unchanged line(s) …`, "muted");
+  }
+
+  function affectedViews() {
+    return draftedSource ? draftAffectedViews : [];
+  }
+
+  function updateDraftPreview() {
+    if (!draftedSource) return;
+    draftDirty = draftEditor.value !== originalContent;
+    draftedSource.classList.toggle("is-drafted", draftDirty);
+    let pill = draftedSource.querySelector("[data-draft-pill]");
+    if (draftDirty && !pill) {
+      pill = document.createElement("span");
+      pill.className = "pill draft-pill";
+      pill.dataset.draftPill = "";
+      pill.textContent = "draft";
+      draftedSource.querySelector(".instruction-source-meta")?.prepend(pill);
+    } else if (!draftDirty && pill) pill.remove();
+    draftStatus.textContent = draftDirty ? "Unsaved local draft · stored only in this page" : "Draft matches the published source.";
+    renderDiff(originalContent, draftEditor.value, sourceDiff);
+    const activeView = viewByPath.get(selectedPath);
+    const appliesHere = activeView && activeView.dataset.sourceIds.split(" ").includes(draftedSource.id);
+    selectedImpact.textContent = appliesHere
+      ? `Changes the effective repository instructions for ${selectedPath}.`
+      : `Does not change the effective repository instructions for ${selectedPath}.`;
+    renderDiff(
+      activeView ? effectiveText(activeView, false) : "",
+      activeView && appliesHere ? effectiveText(activeView, true) : (activeView ? effectiveText(activeView, false) : ""),
+      effectiveDiff
+    );
+    const affected = affectedViews();
+    affectedCount.textContent = affected.length === 1 ? "1 directory" : `${affected.length} directories`;
+    if (affectedList.dataset.sourceId !== draftedSource.id) {
+      affectedList.dataset.sourceId = draftedSource.id;
+      affectedList.replaceChildren();
+      affected.forEach((view) => {
+        const item = document.createElement("li");
+        item.textContent = view.dataset.instructionView;
+        affectedList.append(item);
+      });
+    }
+  }
+
+  async function checkDraftBase() {
+    if (!draftedSource) return;
+    try {
+      const response = await fetch("data/index.json", { cache: "no-store" });
+      if (!response.ok) return;
+      const current = await response.json();
+      const currentSource = current.instructions?.sources?.find((source) => source.path === draftedSource.dataset.sourcePath);
+      const mismatched = current.commit !== draftPanel.dataset.baseCommit ||
+        !currentSource || currentSource.sha256 !== draftedSource.dataset.sourceHash;
+      staleDraft.hidden = !mismatched;
+    } catch (_error) {
+      // Offline and file:// views remain editable; provenance stays visible in the page.
+    }
+  }
+
+  function discardDraft(askFirst) {
+    if (!draftedSource) return true;
+    if (askFirst && draftDirty && !window.confirm("Discard the unsaved local instruction draft?")) return false;
+    draftedSource.classList.remove("is-drafted");
+    draftedSource.querySelector("[data-draft-pill]")?.remove();
+    draftedSource = null;
+    originalContent = "";
+    draftDirty = false;
+    draftAffectedViews = [];
+    delete affectedList.dataset.sourceId;
+    draftEditor.value = "";
+    draftPanel.hidden = true;
+    staleDraft.hidden = true;
+    return true;
+  }
+
+  function startDraft(source) {
+    if (draftedSource === source) {
+      draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      draftEditor.focus();
+      return;
+    }
+    if (!discardDraft(true)) return;
+    draftedSource = source;
+    draftAffectedViews = views.filter((view) => view.dataset.sourceIds.split(" ").includes(source.id));
+    originalContent = source.querySelector("pre")?.textContent || "";
+    draftEditor.value = originalContent;
+    draftPanel.hidden = false;
+    updateDraftPreview();
+    checkDraftBase();
+    draftPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    draftEditor.focus();
+  }
+
   function updateLocation() {
     const url = new URL(window.location.href);
     url.searchParams.set("dir", selectedPath);
@@ -2390,6 +2573,7 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
     document.querySelector("[data-selected-summary]").textContent = count === 1 ? "1 applicable source" : `${count} applicable sources`;
     renderEffective(view);
     setPanel(activePanel, false);
+    if (draftedSource) updateDraftPreview();
     if (updateUrl) updateLocation();
   }
 
@@ -2478,10 +2662,26 @@ def instruction_sources_body(report: dict[str, Any], project: dict[str, Any], co
   });
 
   document.addEventListener("click", (event) => {
+    const edit = event.target.closest("[data-edit-source]");
+    if (edit) {
+      const source = edit.closest("[data-instruction-source]");
+      if (source) startDraft(source);
+      return;
+    }
     const link = event.target.closest("[data-source-jump]");
     if (!link) return;
     setPanel("effective", true);
     requestAnimationFrame(() => document.querySelector(link.getAttribute("href"))?.scrollIntoView({ block: "start" }));
+  });
+  draftEditor?.addEventListener("input", updateDraftPreview);
+  document.querySelector("[data-discard-draft]")?.addEventListener("click", () => discardDraft(true));
+  window.addEventListener("beforeunload", (event) => {
+    if (!draftDirty) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && draftedSource) checkDraftBase();
   });
   filter.addEventListener("input", applyFilter);
   window.addEventListener("popstate", () => {
@@ -3695,6 +3895,21 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert instruction_html.count("repairTreeTabStop();") == 2, (
         "filtering and clearing the filter must both restore a visible tree tab stop"
     )
+    assert instruction_html.count("class=instruction-edit-button data-edit-source") == 4, (
+        "only published sources used by an effective chain must be locally editable"
+    )
+    assert 'data-base-commit="abcdef123456"' in instruction_html
+    assert "Edit one concrete source in page memory" in instruction_html
+    assert 'data-source-path="src/api/AGENTS.override.md"' in instruction_html
+    assert 'data-source-hash="' in instruction_html
+    assert 'fetch("data/index.json", { cache: "no-store" })' in instruction_html
+    assert 'window.addEventListener("beforeunload"' in instruction_html
+    assert 'span.textContent = marker + line;' in instruction_html, (
+        "untrusted draft diff lines must be rendered as text, never HTML"
+    )
+    assert "innerHTML" not in instruction_html, "draft and explorer paths must not inject HTML"
+    assert "function affectedViews()" in instruction_html
+    assert "currentSource.sha256 !== draftedSource.dataset.sourceHash" in instruction_html
 
     limited_cfg = instructions_settings({
         "instructions_dir": ".",

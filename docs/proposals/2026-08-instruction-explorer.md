@@ -1,6 +1,6 @@
 # Plan: repository instruction explorer and change proposals
 
-Status: phase 1 implemented; phases 2-4 planned
+Status: phase 1 implemented; phase 2 in progress; phases 3-4 planned
 Date: 2026-08-21
 Scope: repository-visible agent instructions for one monitored project
 Constraints: the hub stays read-only, Git stays the database, generated pages
@@ -282,10 +282,13 @@ verification remains a release check rather than an implementation claim.
 
 ### Phase 2 - local draft and deterministic impact preview
 
-- edit one existing source in page memory;
-- recompute Codex chains using an in-memory overlay;
+- edit one existing source in page memory; **implemented 2026-08-21**
+- recompute Codex chains using an in-memory overlay; **implemented for
+  content-only edits, whose source selection is unchanged**
 - show source diff, selected-directory effective diff, and affected subtree;
-- detect stale base commit/hash;
+  **implemented for content-only edits**
+- detect stale base commit/hash; **implemented through a no-cache comparison
+  with the currently published `data/index.json`**
 - support proposed add/delete after single-file editing is verified;
 - add escaping and adversarial-content tests for every draft-rendering path.
 

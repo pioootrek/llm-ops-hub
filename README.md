@@ -229,6 +229,15 @@ source previews are emitted once and moved into the selected effective view in
 the browser. `data/index.json` contains ordered paths, provenance hashes, limit
 findings, and no instruction text.
 
+An editable source can be opened as a single-file local draft. Draft text stays
+in page memory and is never sent to the hub or written to the monitored
+repository. The browser shows a line diff, the effective-instruction diff for
+the selected directory, and every mapped directory whose chain uses that
+source. It also compares the draft's base commit and source hash with the
+current `data/index.json` when possible, warns if the published release changed,
+and warns before leaving with unsaved text. Reloading or discarding loses the
+draft. Creating/deleting sources and exporting a patch remain follow-on work.
+
 ## Human feedback
 
 The hub is read-only, but when `project.github_repo` is set, each rendered
