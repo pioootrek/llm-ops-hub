@@ -1,21 +1,18 @@
 # Plan: tiny tool, full punch
 
-Status: plan, for discussion (2026-07-18)
-Scope: what comes next for the hub after the July 2026 proposals
+Status: completed (2026-08-21)
+Scope: implementation record for the work selected after the July 2026 proposals
 Constraint: every item respects the invariants in `AGENTS.md` (read-only hub,
 git is the database, one canonical form, fail-closed build, minimal
 dependencies). This file extends `docs/proposals/2026-07-hub-improvements.md`;
 items already proposed or implemented from it are referenced, not repeated.
 
-Progress (2026-08-20): phase 1 is implemented: repository CI,
+Completed: phase 1 shipped repository CI,
 `validate --json`, HTML escaping self-tests, and a monitored-project CI
-template. Items 3.1 and 3.2 are documented.
-Items 2.1 and 2.2 are implemented as one Health report.
-Item 2.3 is implemented: item cards and JSON expose exact note references.
-Item 2.4 is implemented: projects without GitHub get selectable feedback
-payloads.
-Item 2.5 is implemented: opt-in Codex repository instruction sources are
-mapped by directory with provenance hashes and bounded, escaped previews.
+template. Phase 2 shipped the Health report, note-to-item links, non-GitHub
+feedback payloads, and the opt-in repository instruction map. Phase 3 records
+the single-project boundary and contract migration policy. This file remains
+as the implementation record; further work needs a new plan.
 
 ## The rule: mega simple, mega functional
 
