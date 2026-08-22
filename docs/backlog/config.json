@@ -1,0 +1,17 @@
+{
+  "areas": [
+    "backlog-contract",
+    "build-runtime",
+    "instruction-explorer",
+    "portfolio-ui",
+    "project-operations"
+  ],
+  "health_stale_days": 30,
+  "instructions_dir": ".",
+  "instructions_lint_claude_include": true,
+  "instructions_max_file_bytes": 65536,
+  "instructions_max_files": 5000,
+  "instructions_max_total_bytes": 524288,
+  "notes_stale_days": 60,
+  "schema_version": 1
+}

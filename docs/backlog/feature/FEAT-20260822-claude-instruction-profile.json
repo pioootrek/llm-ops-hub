@@ -1,0 +1,44 @@
+{
+  "area": "instruction-explorer",
+  "created": "2026-08-22",
+  "id": "FEAT-20260822-claude-instruction-profile",
+  "links": {
+    "prs": [],
+    "related_ids": []
+  },
+  "notes": [
+    {
+      "date": "2026-08-22",
+      "text": "Refresh the implementation contract against current official Claude Code documentation before development starts. Decision state: proposed."
+    }
+  ],
+  "priority": "later",
+  "problem": [
+    "Instruction Explorer currently models Codex repository instruction discovery only, so repositories using Claude-specific sources cannot inspect that profile deterministically."
+  ],
+  "risk": {
+    "dimensions": [
+      "data-exposure",
+      "external-integration"
+    ],
+    "level": "medium",
+    "rollback": "Disable the Claude profile while retaining the Codex profile and the existing AGENTS.md to CLAUDE.md convention lint."
+  },
+  "schema_version": 1,
+  "scope": [
+    "Define a versioned Claude repository profile from current official documentation, including repository-local imports, path-scoped rules, and load-on-demand distinctions that can be derived from one mirrored commit.",
+    "Present a conforming CLAUDE.md containing only @AGENTS.md as a bridge when the project policy is enabled, while preserving independent CLAUDE.md content when it is disabled.",
+    "Keep user, enterprise, managed, plugin, skill, subagent, memory, and repository-external sources visibly outside the report rather than implying a complete runtime prompt."
+  ],
+  "source": "docs/proposals/2026-08-instruction-explorer.md phase 4",
+  "status": "open",
+  "title": "Add a versioned Claude instruction profile",
+  "type": "feature",
+  "validation": [
+    "Fixtures cover enabled and disabled bridge policy, independent CLAUDE.md content, safe local imports, path scope, unresolved external imports, and all configured scan limits.",
+    "The rendered profile names its version, documentation source, and as-of date without claiming to reproduce Claude's complete prompt."
+  ],
+  "value": [
+    "Teams using Codex and Claude can compare repository-visible instruction behavior from the same immutable project release."
+  ]
+}
