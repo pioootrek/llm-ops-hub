@@ -10,8 +10,8 @@ static HTML + JSON site for humans and agents.
 Subcommands:
   fmt        canonicalize item files and regenerate index.json (working copy)
   validate   schema + cross-file + canonical-form checks (working copy)
-  sync       clone/fetch the bare mirror of the project repo
-  build      render a static release from the mirror at the configured ref
+  sync       clone/fetch the configured project mirrors
+  build      render project releases and the shared dashboard
   serve      serve the generated site (stdlib http.server)
   self-test  run built-in contract tests, no config or network needed
 """
@@ -206,11 +206,8 @@ def load_hub_config(explicit: str | None) -> dict[str, Any]:
 
 
 def _resolve_hub_config(path: Path, raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
-        raise ConfigError(f"{path}: expected a mapping with schema_version 1")
-    project = raw.get("project")
-    if not isinstance(project, dict) or not str(project.get("repo_url", "")).strip():
-        raise ConfigError(f"{path}: project.repo_url is required")
+    if not isinstance(raw, dict) or raw.get("schema_version") not in {1, 2}:
+        raise ConfigError(f"{path}: expected a mapping with schema_version 1 or 2")
 
     paths_raw = raw.get("paths") if isinstance(raw.get("paths"), dict) else {}
     root = Path(str(paths_raw.get("root", "~/.local/share/llm-ops-hub"))).expanduser()
@@ -221,28 +218,81 @@ def _resolve_hub_config(path: Path, raw: Any) -> dict[str, Any]:
 
     server = raw.get("server") if isinstance(raw.get("server"), dict) else {}
     build = raw.get("build") if isinstance(raw.get("build"), dict) else {}
-    return {
+
+    def resolve_project(value: Any, *, project_id: str | None = None) -> dict[str, Any]:
+        label = f"projects[{project_id}]" if project_id else "project"
+        if not isinstance(value, dict) or not str(value.get("repo_url", "")).strip():
+            raise ConfigError(f"{path}: {label}.repo_url is required")
+        project = {
+            "name": str(value.get("name", "Backlog")).strip() or "Backlog",
+            "repo_url": str(value["repo_url"]).strip(),
+            "github_repo": str(value.get("github_repo", "")).strip() or None,
+            "backlog_ref": str(value.get("backlog_ref", "main")).strip() or "main",
+            "backlog_dir": str(value.get("backlog_dir", "docs/backlog")).strip().strip("/"),
+        }
+        if project_id is not None:
+            project["id"] = project_id
+        return project
+
+    base = {
         "config_path": path,
-        "project": {
-            "name": str(project.get("name", "Backlog")).strip() or "Backlog",
-            "repo_url": str(project["repo_url"]).strip(),
-            "github_repo": str(project.get("github_repo", "")).strip() or None,
-            "backlog_ref": str(project.get("backlog_ref", "main")).strip() or "main",
-            "backlog_dir": str(project.get("backlog_dir", "docs/backlog")).strip().strip("/"),
-        },
-        "paths": {
-            "root": root,
-            "mirror": resolve("mirror", "{root}/mirror.git"),
-            "cache": resolve("cache", "{root}/cache"),
-            "releases": resolve("releases", "{root}/public_releases"),
-            "public": resolve("public", "{root}/public"),
-        },
         "server": {
             "host": str(server.get("host", "127.0.0.1")),
             "port": int(server.get("port", 8080)),
         },
         "build": {
             "releases_keep": max(0, int(build.get("releases_keep", 20))),
+        },
+    }
+    if raw["schema_version"] == 1:
+        project = resolve_project(raw.get("project"))
+        return {
+            **base,
+            "multi_project": False,
+            "project": project,
+            "projects": [project],
+            "paths": {
+                "root": root,
+                "mirror": resolve("mirror", "{root}/mirror.git"),
+                "cache": resolve("cache", "{root}/cache"),
+                "releases": resolve("releases", "{root}/public_releases"),
+                "public": resolve("public", "{root}/public"),
+            },
+        }
+
+    raw_projects = raw.get("projects")
+    if not isinstance(raw_projects, list) or not raw_projects:
+        raise ConfigError(f"{path}: projects must be a non-empty array")
+    projects = []
+    seen_ids: set[str] = set()
+    for index, value in enumerate(raw_projects):
+        project_id = str(value.get("id", "")).strip() if isinstance(value, dict) else ""
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?", project_id):
+            raise ConfigError(
+                f"{path}: projects[{index}].id must use lowercase letters, digits, and hyphens"
+            )
+        if project_id in seen_ids:
+            raise ConfigError(f"{path}: duplicate project id {project_id!r}")
+        seen_ids.add(project_id)
+        project = resolve_project(value, project_id=project_id)
+        project_root = root / "projects" / project_id
+        project["paths"] = {
+            "root": project_root,
+            "mirror": project_root / "mirror.git",
+            "cache": project_root / "cache",
+            "releases": project_root / "public_releases",
+            "public": project_root / "public",
+        }
+        projects.append(project)
+    return {
+        **base,
+        "multi_project": True,
+        "projects": projects,
+        "paths": {
+            "root": root,
+            "cache": resolve("cache", "{root}/cache"),
+            "releases": resolve("releases", "{root}/public_releases"),
+            "public": resolve("public", "{root}/public"),
         },
     }
 
@@ -1250,20 +1300,52 @@ def cmd_validate(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Commands: sync / build / serve (hub host)
 
-def cmd_sync(args: argparse.Namespace) -> int:
-    cfg = load_hub_config(args.config)
-    mirror = cfg["paths"]["mirror"]
-    repo_url = cfg["project"]["repo_url"]
+def selected_projects(cfg: dict[str, Any], requested: str | None) -> list[dict[str, Any]]:
+    if not cfg["multi_project"]:
+        if requested:
+            raise ConfigError("--project is available only with a schema_version 2 multi-project config")
+        return cfg["projects"]
+    if not requested:
+        return cfg["projects"]
+    matches = [project for project in cfg["projects"] if project["id"] == requested]
+    if not matches:
+        raise ConfigError(f"unknown project {requested!r}")
+    return matches
+
+
+def project_instance_config(cfg: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    if not cfg["multi_project"]:
+        return cfg
+    return {
+        **cfg,
+        "project": {key: value for key, value in project.items() if key != "paths"},
+        "paths": project["paths"],
+    }
+
+
+def sync_project(project: dict[str, Any], paths: dict[str, Path]) -> int:
+    mirror = paths["mirror"]
+    repo_url = project["repo_url"]
+    label = f"[{project['id']}] " if project.get("id") else ""
     mirror.parent.mkdir(parents=True, exist_ok=True)
     if not mirror.exists():
         result = run(["git", "clone", "--mirror", repo_url, str(mirror)])
     else:
         result = run(["git", f"--git-dir={mirror}", "fetch", "--prune", "origin", "+refs/heads/*:refs/heads/*"])
     if result.returncode != 0:
-        print(result.stderr.strip(), file=sys.stderr)
+        print(f"sync: {label}{result.stderr.strip()}", file=sys.stderr)
         return 1
-    print(f"sync: mirror up to date at {mirror}")
+    print(f"sync: {label}mirror up to date at {mirror}")
     return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    cfg = load_hub_config(args.config)
+    results = [
+        sync_project(project, project_instance_config(cfg, project)["paths"])
+        for project in selected_projects(cfg, getattr(args, "project", None))
+    ]
+    return 1 if any(results) else 0
 
 
 def gh_json(args: list[str]) -> tuple[list[dict[str, Any]], str | None]:
@@ -1314,9 +1396,8 @@ def prune_releases(releases_dir: Path, current: Path, keep: int) -> None:
 
 def write_heartbeat(public: Path, commit: str, result: str) -> None:
     """The one mutable file inside the otherwise immutable live release.
-    Touched on every SUCCESSFUL build attempt - including no-op skips - it
-    proves the sync/build pipeline is alive; the staleness banner alarms on
-    heartbeat age, never on content age (a quiet backlog is not a failure)."""
+    Touched on every build attempt when a live release exists, it distinguishes
+    a fresh success, a fresh failure, and a pipeline that stopped running."""
     heartbeat = {
         "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "commit": commit,
@@ -1326,18 +1407,22 @@ def write_heartbeat(public: Path, commit: str, result: str) -> None:
     (public / "heartbeat.json").write_text(canonical_json(heartbeat), encoding="utf-8")
 
 
-def cmd_build(args: argparse.Namespace) -> int:
-    cfg = load_hub_config(args.config)
+def build_project(cfg: dict[str, Any], args: argparse.Namespace) -> int:
     project = cfg["project"]
     paths = cfg["paths"]
+    label = f"[{project['id']}] " if project.get("id") else ""
 
     if not paths["mirror"].exists():
-        print("build: mirror is not initialized (run: hub.py sync)", file=sys.stderr)
+        if paths["public"].exists():
+            write_heartbeat(paths["public"], "", "failed")
+        print(f"build: {label}mirror is not initialized (run: hub.py sync)", file=sys.stderr)
         return 1
     source = MirrorSource(paths["mirror"], project["backlog_ref"], project["backlog_dir"])
     commit = source.resolve_commit()
     if commit is None:
-        print(f"build: ref {project['backlog_ref']} not found in mirror", file=sys.stderr)
+        if paths["public"].exists():
+            write_heartbeat(paths["public"], "", "failed")
+        print(f"build: {label}ref {project['backlog_ref']} not found in mirror", file=sys.stderr)
         return 1
 
     issues, issue_error = load_feedback_issues(project["github_repo"])
@@ -1352,7 +1437,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         and paths["public"].exists()
     ):
         write_heartbeat(paths["public"], commit, "skipped")
-        print(f"build: no changes at {project['backlog_ref']} ({commit[:10]}); keeping current release")
+        print(f"build: {label}no changes at {project['backlog_ref']} ({commit[:10]}); keeping current release")
         return 0
 
     schema = load_schema(source)
@@ -1378,9 +1463,11 @@ def cmd_build(args: argparse.Namespace) -> int:
             MirrorRepoSource(paths["mirror"], project["backlog_ref"]), instruction_cfg
         )
     if errors:
+        if paths["public"].exists():
+            write_heartbeat(paths["public"], commit, "failed")
         for error in errors:
-            print(error, file=sys.stderr)
-        print("build: refusing to render an invalid backlog; previous release stays live", file=sys.stderr)
+            print(f"{label}{error}", file=sys.stderr)
+        print(f"build: {label}refusing to render an invalid backlog; previous release stays live", file=sys.stderr)
         return 2
 
     paths["cache"].mkdir(parents=True, exist_ok=True)
@@ -1404,8 +1491,150 @@ def cmd_build(args: argparse.Namespace) -> int:
     write_heartbeat(paths["public"], commit, "rendered")
     state_path.write_text(state_key, encoding="utf-8")
     prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
-    print(f"build: {len(items)} items at {project['backlog_ref']} ({commit[:10]}) -> {paths['public']}")
+    print(f"build: {label}{len(items)} items at {project['backlog_ref']} ({commit[:10]}) -> {paths['public']}")
     return 0
+
+
+def portfolio_summary(project: dict[str, Any]) -> dict[str, Any]:
+    index_path = project["paths"]["cache"] / "index.json"
+    summary = {
+        "id": project["id"],
+        "name": project["name"],
+        "available": False,
+        "href": f"projects/{project['id']}/index.html",
+    }
+    if not index_path.is_file() or not project["paths"]["public"].exists():
+        return summary
+    try:
+        data = parse_json(str(index_path), index_path.read_text(encoding="utf-8"))
+    except (OSError, ContractError):
+        return summary
+    backlog = data.get("backlog", []) if isinstance(data, dict) else []
+    active = [item for item in backlog if isinstance(item, dict) and item.get("status") != "archived"]
+    health = data.get("health", {}) if isinstance(data.get("health"), dict) else {}
+    summary.update({
+        "active": len(active),
+        "available": True,
+        "commit": str(data.get("commit", "")),
+        "generated_at": str(data.get("generated_at", "")),
+        "health_findings": len(health.get("item_findings", [])) + len(health.get("note_findings", [])),
+        "now": [
+            {"id": str(item.get("id", "")), "risk": str(item.get("risk", {}).get("level", "")), "title": str(item.get("title", ""))}
+            for item in active if item.get("priority") == "now"
+        ],
+        "ref": str(data.get("ref", project["backlog_ref"])),
+    })
+    heartbeat_path = project["paths"]["public"] / "heartbeat.json"
+    if heartbeat_path.is_file():
+        try:
+            heartbeat = parse_json(str(heartbeat_path), heartbeat_path.read_text(encoding="utf-8"))
+            summary["latest_build"] = "failed" if heartbeat.get("result") == "failed" else "ok"
+        except (OSError, ContractError, AttributeError):
+            pass
+    return summary
+
+
+def render_portfolio(
+    cfg: dict[str, Any], build_results: dict[str, int] | None = None
+) -> list[dict[str, Any]]:
+    paths = cfg["paths"]
+    paths["cache"].mkdir(parents=True, exist_ok=True)
+    paths["releases"].mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    release = paths["releases"] / stamp
+    if release.exists():
+        release = paths["releases"] / f"{stamp}-{os.getpid()}"
+    (release / "assets").mkdir(parents=True)
+    (release / "data").mkdir()
+    (release / "projects").mkdir()
+    (release / "assets/styles.css").write_text(CSS, encoding="utf-8")
+
+    summaries = [portfolio_summary(project) for project in cfg["projects"]]
+    for summary in summaries:
+        if build_results and summary["id"] in build_results:
+            summary["latest_build"] = "ok" if build_results[summary["id"]] == 0 else "failed"
+    generated_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    portfolio_data = {"generated_at": generated_at, "projects": summaries, "schema_version": 1}
+    payload = canonical_json(portfolio_data)
+    (release / "data/projects.json").write_text(payload, encoding="utf-8")
+    (paths["cache"] / "projects.json").write_text(payload, encoding="utf-8")
+
+    for project, summary in zip(cfg["projects"], summaries):
+        if summary["available"]:
+            (release / "projects" / project["id"]).symlink_to(project["paths"]["public"], target_is_directory=True)
+
+    options = '<option value="index.html" selected>All projects</option>' + "".join(
+        f'<option value="projects/{h(project["id"])}/index.html">{h(project["name"])}</option>'
+        for project in cfg["projects"]
+    )
+    cards = []
+    now_rows = []
+    for summary in summaries:
+        if not summary["available"]:
+            cards.append(card(
+                summary["name"],
+                '<p class=warn>No successful build is available.</p>',
+                meta=summary["id"],
+            ))
+            continue
+        failure = (
+            '<p class=warn>Latest build failed. Showing the previous valid release.</p>'
+            if summary.get("latest_build") == "failed" else ""
+        )
+        cards.append(card(
+            summary["name"],
+            failure
+            + f'<p><span class=pill>{summary["active"]} active</span>'
+            f'<span class=pill>{summary["health_findings"]} health findings</span></p>'
+            f'<p><code>{h(summary["ref"])}</code> @ <code>{h(summary["commit"][:10])}</code></p>'
+            f'<p><a href="{h(summary["href"])}">Open project →</a></p>',
+            meta=summary["id"],
+        ))
+        for item in summary["now"]:
+            now_rows.append(
+                f'<li><a class=item-title-link href="projects/{h(summary["id"])}/backlog.html#{h(item["id"])}">'
+                f'{h(summary["name"])} / {h(item["id"])}</a><span>{h(item["title"])}</span>'
+                f'<span class="pill risk-{h(item["risk"])}">{h(item["risk"])}</span></li>'
+            )
+    queue = "".join(now_rows) or '<p class=muted>No items with priority <code>now</code>.</p>'
+    body = (
+        '<div class=page-heading><div><h1>All projects</h1>'
+        '<p class=muted>Independent repositories and backlogs monitored by this hub.</p></div>'
+        f'<div class=heading-meta><span class=pill>{len(cfg["projects"])} projects</span></div></div>'
+        f'<section class=grid>{"".join(cards)}</section>'
+        f'<section class=dash-queue>{card("Now across projects", f"<ul class=queue-list>{queue}</ul>" if now_rows else queue)}</section>'
+    )
+    html_page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All projects · LLM Ops Hub</title><link rel="stylesheet" href="assets/styles.css"></head>
+<body><header><div class="project-brand"><strong>LLM Ops Hub</strong><span>read-only · git is the source of truth</span></div>
+<label class="project-picker"><span>Project</span><select data-project-switch>{options}</select></label></header>
+<main><div id="stale-banner" class="warn" data-stale-after="{STALE_AFTER_MINUTES}" hidden></div>{body}</main>
+{STALE_SCRIPT}<script>document.querySelector('[data-project-switch]').addEventListener('change', function () {{ location.href = this.value; }});</script>
+</body></html>"""
+    (release / "index.html").write_text(html_page, encoding="utf-8")
+
+    tmp_link = paths["root"] / "public.next"
+    if tmp_link.exists() or tmp_link.is_symlink():
+        tmp_link.unlink()
+    tmp_link.symlink_to(release, target_is_directory=True)
+    os.replace(tmp_link, paths["public"])
+    prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
+    return summaries
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    cfg = load_hub_config(args.config)
+    if not cfg["multi_project"]:
+        return build_project(cfg, args)
+    results: dict[str, int] = {}
+    for project in selected_projects(cfg, getattr(args, "project", None)):
+        results[project["id"]] = build_project(project_instance_config(cfg, project), args)
+    summaries = render_portfolio(cfg, results)
+    commits = "".join(portfolio_summary(project).get("commit", "") for project in cfg["projects"])
+    result = "partial-failure" if any(summary.get("latest_build") == "failed" for summary in summaries) else "rendered"
+    write_heartbeat(cfg["paths"]["public"], hashlib.sha256(commits.encode()).hexdigest(), result)
+    return max(results.values(), default=0)
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -1464,14 +1693,26 @@ STALE_SCRIPT = """
   const limit = Number(banner.dataset.staleAfter);
   async function check() {
     let checkedAt = NaN;
+    let result = "";
     try {
       const response = await fetch("heartbeat.json", { cache: "no-store" });
-      if (response.ok) checkedAt = Date.parse((await response.json()).checked_at);
+      if (response.ok) {
+        const heartbeat = await response.json();
+        checkedAt = Date.parse(heartbeat.checked_at);
+        result = heartbeat.result || "";
+      }
     } catch (error) {
       /* no HTTP context or heartbeat missing - stay silent rather than false-alarm */
     }
     if (!isFinite(checkedAt)) {
       banner.hidden = true;
+      return;
+    }
+    if (result === "failed" || result === "partial-failure") {
+      banner.textContent = result === "failed"
+        ? "The latest build failed. This is the previous valid release."
+        : "One or more projects failed their latest build. Previous valid releases remain available.";
+      banner.hidden = false;
       return;
     }
     const minutes = Math.round((Date.now() - checkedAt) / 60000);
@@ -1520,7 +1761,19 @@ FEEDBACK_COPY_SCRIPT = """
 """
 
 
-def page(project_name: str, title: str, body: str, *, active: str, generated_at: str = "", css_version: str = "", with_docs: bool = False, with_instructions: bool = False) -> str:
+def page(
+    project_name: str,
+    title: str,
+    body: str,
+    *,
+    active: str,
+    generated_at: str = "",
+    css_version: str = "",
+    with_docs: bool = False,
+    with_instructions: bool = False,
+    projects: list[dict[str, Any]] | None = None,
+    project_id: str | None = None,
+) -> str:
     links = [
         ("home", "index.html", "Dashboard"),
         ("backlog", "backlog.html", "Backlog"),
@@ -1535,6 +1788,34 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
         f'<a class="{"active" if key == active else ""}" href="{href}">{label}</a>'
         for key, href, label in links
     )
+    picker = ""
+    picker_script = ""
+    if projects and project_id:
+        page_name = {
+            "home": "index.html", "backlog": "backlog.html", "notes": "notes.html",
+            "done": "done.html", "health": "health.html",
+        }.get(active, "index.html")
+        options = '<option value="../../index.html">All projects</option>' + "".join(
+            f'<option value="../{h(project["id"])}/{page_name}"'
+            f'{" selected" if project["id"] == project_id else ""}>{h(project["name"])}</option>'
+            for project in projects
+        )
+        picker = (
+            '<label class="project-picker"><span>Project</span>'
+            f'<select data-project-switch>{options}</select></label>'
+        )
+        picker_script = """<script>
+document.querySelector('[data-project-switch]').addEventListener('change', function () {
+  try { localStorage.setItem('llm-ops-hub-project', this.value); } catch (error) {}
+  location.href = this.value;
+});
+</script>"""
+    identity = (
+        f'<div class="header-identity"><div class="project-brand"><strong>LLM Ops Hub</strong>'
+        f'<span>{h(project_name)} · read-only · git is the source of truth</span></div>{picker}</div>'
+        if picker else
+        f'<div><strong>{h(project_name)} · LLM Ops Hub</strong><span>read-only · git is the source of truth</span></div>'
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1545,13 +1826,13 @@ def page(project_name: str, title: str, body: str, *, active: str, generated_at:
 </head>
 <body>
 <header>
-  <div><strong>{h(project_name)} · LLM Ops Hub</strong><span>read-only · git is the source of truth</span></div>
+  {identity}
   <nav>{nav}</nav>
 </header>
 <main>
 <div id="stale-banner" class="warn" data-generated-at="{h(generated_at)}" data-stale-after="{STALE_AFTER_MINUTES}" hidden></div>
 {body}</main>
-{STALE_SCRIPT}{FEEDBACK_COPY_SCRIPT}</body>
+{STALE_SCRIPT}{FEEDBACK_COPY_SCRIPT}{picker_script}</body>
 </html>
 """
 
@@ -1586,6 +1867,10 @@ CSS = (
     'header{position:sticky;top:0;z-index:20;background:var(--header-bg);backdrop-filter:saturate(180%) blur(12px);'
     'border-bottom:1px solid var(--border);padding:12px 24px;display:flex;justify-content:space-between;'
     'gap:16px;align-items:center}header strong{font-size:14px;font-weight:650}header span{display:block;color:var(--muted);font-size:12px}'
+    '.header-identity{display:flex;align-items:center;gap:18px;min-width:0}.project-brand{min-width:max-content}'
+    '.project-picker{display:grid;gap:3px}.project-picker>span{font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.04em}'
+    '.project-picker select{min-width:190px;height:32px;border:1px solid var(--border);border-radius:6px;background:var(--surface);'
+    'color:var(--foreground);padding:0 28px 0 8px;font:inherit;font-size:13px}.project-picker select:focus{outline:2px solid var(--ring);outline-offset:2px}'
     'nav{display:flex;gap:6px;flex-wrap:wrap}nav a{color:var(--foreground);text-decoration:none;border:1px solid transparent;'
     'padding:6px 10px;border-radius:6px;background:transparent;font-size:13px;font-weight:500}'
     'nav a:hover{background:var(--accent)}nav a.active{background:var(--foreground);color:var(--on-strong);border-color:var(--foreground)}'
@@ -1703,7 +1988,7 @@ CSS = (
     '.instruction-patch{margin-top:18px;border-top:1px solid var(--border);padding-top:16px}.instruction-patch-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}'
     '.instruction-patch-header h3{margin:0 0 4px}.instruction-patch pre{max-height:420px;margin:10px 0 0;white-space:pre;overflow:auto}.instruction-export-status{min-height:1.4em;margin:7px 0 0}'
     'h3{font-size:12px;margin:14px 0 4px;text-transform:uppercase;color:var(--label);font-weight:650}'
-    '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.page-heading{display:block}'
+    '@media(max-width:900px){header{align-items:flex-start;flex-direction:column}.header-identity{align-items:flex-start;flex-direction:column;gap:9px}.page-heading{display:block}'
     '.heading-meta{justify-content:flex-start;margin-top:10px}.toolbar{grid-template-columns:1fr 1fr}.toolbar .control:first-child{grid-column:1/-1}'
     '.toolbar-actions{grid-column:1/-1;justify-content:flex-start}.backlog-layout{grid-template-columns:1fr}.detail-pane{position:static}'
     '.instruction-explorer{grid-template-columns:1fr}.instruction-navigator{border-right:0;border-bottom:1px solid var(--border)}'
@@ -3127,6 +3412,10 @@ def render_site(
     issue_error = github["issue_error"]
     with_docs = docs is not None and docs_source is not None and docs_cfg is not None
     with_instructions = instructions_report is not None
+    page_context = {
+        "projects": cfg["projects"] if cfg.get("multi_project") else None,
+        "project_id": project.get("id"),
+    }
 
     (out / "assets").mkdir(parents=True, exist_ok=True)
     (out / "data").mkdir(parents=True, exist_ok=True)
@@ -3272,6 +3561,7 @@ def render_site(
             css_version=css_version,
             with_docs=with_docs,
             with_instructions=with_instructions,
+            **page_context,
         ),
         encoding="utf-8",
     )
@@ -3503,7 +3793,7 @@ document.documentElement.classList.add("js");
         + backlog_script
     )
     (out / "backlog.html").write_text(
-        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions),
+        page(name, "Backlog", backlog_body, active="backlog", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions, **page_context),
         encoding="utf-8",
     )
 
@@ -3571,7 +3861,7 @@ document.documentElement.classList.add("js");
 """
     )
     (out / "notes.html").write_text(
-        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions),
+        page(name, "Notes", notes_body, active="notes", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions, **page_context),
         encoding="utf-8",
     )
 
@@ -3645,7 +3935,7 @@ document.documentElement.classList.add("js");
 </script>
 """
     (out / "done.html").write_text(
-        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions),
+        page(name, "Done", done_body, active="done", generated_at=generated_at, css_version=css_version, with_docs=with_docs, with_instructions=with_instructions, **page_context),
         encoding="utf-8",
     )
 
@@ -3659,6 +3949,7 @@ document.documentElement.classList.add("js");
             css_version=css_version,
             with_docs=with_docs,
             with_instructions=with_instructions,
+            **page_context,
         ),
         encoding="utf-8",
     )
@@ -3674,6 +3965,7 @@ document.documentElement.classList.add("js");
                 css_version=css_version,
                 with_docs=True,
                 with_instructions=with_instructions,
+                **page_context,
             ),
             encoding="utf-8",
         )
@@ -3689,6 +3981,7 @@ document.documentElement.classList.add("js");
                 css_version=css_version,
                 with_docs=with_docs,
                 with_instructions=True,
+                **page_context,
             ),
             encoding="utf-8",
         )
@@ -4539,7 +4832,59 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
     assert cfg["paths"]["mirror"] == cfg["paths"]["root"] / "mirror.git", "mirror default must live under root"
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "x"}, "build": {"releases_keep": -5}})
     assert cfg["build"]["releases_keep"] == 0, "negative releases_keep must clamp to 0"
-    for bad_cfg in [{"schema_version": 1}, {"schema_version": 2, "project": {"repo_url": "x"}}, []]:
+    with tempfile.TemporaryDirectory() as tmp:
+        multi_cfg = _resolve_hub_config(Path("test-config.json"), {
+            "schema_version": 2,
+            "paths": {"root": tmp},
+            "projects": [
+                {"id": "app", "name": "App", "repo_url": "git@example.com:app.git"},
+                {"id": "infra", "name": "Infrastructure", "repo_url": "git@example.com:infra.git", "backlog_dir": "ops/backlog"},
+            ],
+        })
+        assert multi_cfg["multi_project"] and len(multi_cfg["projects"]) == 2
+        assert multi_cfg["projects"][0]["paths"]["mirror"] == Path(tmp) / "projects" / "app" / "mirror.git"
+        assert multi_cfg["projects"][1]["backlog_dir"] == "ops/backlog"
+        assert selected_projects(multi_cfg, "infra")[0]["name"] == "Infrastructure"
+        picker_html = page(
+            "App", "Backlog", "", active="backlog", projects=multi_cfg["projects"], project_id="app"
+        )
+        assert '<option value="../../index.html">All projects</option>' in picker_html
+        assert '<option value="../infra/backlog.html">Infrastructure</option>' in picker_html
+
+        for project in multi_cfg["projects"]:
+            project["paths"]["cache"].mkdir(parents=True)
+            project["paths"]["public"].mkdir(parents=True)
+            test_index = {
+                "backlog": [{
+                    "id": f"FEAT-20260703-{project['id']}", "priority": "now",
+                    "risk": {"level": "low"}, "status": "open", "title": f"Work on {project['name']}",
+                }],
+                "commit": "abcdef123456", "generated_at": "2026-07-03T12:00:00+00:00",
+                "health": {"item_findings": [], "note_findings": []}, "ref": "main",
+            }
+            (project["paths"]["cache"] / "index.json").write_text(canonical_json(test_index), encoding="utf-8")
+        render_portfolio(multi_cfg)
+        portfolio = parse_json(
+            "portfolio", (multi_cfg["paths"]["public"] / "data/projects.json").read_text(encoding="utf-8")
+        )
+        assert [project["id"] for project in portfolio["projects"]] == ["app", "infra"]
+        assert all(project["active"] == 1 for project in portfolio["projects"])
+        assert (multi_cfg["paths"]["public"] / "projects/app").is_symlink()
+        assert "All projects" in (multi_cfg["paths"]["public"] / "index.html").read_text(encoding="utf-8")
+        write_heartbeat(multi_cfg["projects"][1]["paths"]["public"], "abcdef123456", "failed")
+        summaries = render_portfolio(multi_cfg, {"app": 0})
+        assert summaries[1]["latest_build"] == "failed", "selective build must preserve another project's failure"
+        portfolio_html = (multi_cfg["paths"]["public"] / "index.html").read_text(encoding="utf-8")
+        assert "Latest build failed. Showing the previous valid release." in portfolio_html
+        assert 'result === "failed"' in STALE_SCRIPT, "project pages must reveal a fresh failed build"
+
+    for bad_cfg in [
+        {"schema_version": 1},
+        {"schema_version": 2, "project": {"repo_url": "x"}},
+        {"schema_version": 2, "projects": [{"id": "Bad Id", "repo_url": "x"}]},
+        {"schema_version": 2, "projects": [{"id": "same", "repo_url": "x"}, {"id": "same", "repo_url": "y"}]},
+        [],
+    ]:
         try:
             _resolve_hub_config(Path("test-config.json"), bad_cfg)
         except ConfigError:
@@ -4567,6 +4912,8 @@ def main() -> int:
     for name, fn in [("sync", cmd_sync), ("build", cmd_build), ("serve", cmd_serve)]:
         p = sub.add_parser(name)
         p.add_argument("--config", default=None, help="hub config file (default: LLM_OPS_HUB_CONFIG or config.json next to the tool)")
+        if name in {"sync", "build"}:
+            p.add_argument("--project", default=None, help="sync or build one project id from a multi-project config")
         if name == "build":
             p.add_argument("--force", action="store_true", help="render even if nothing changed since the last build")
         p.set_defaults(fn=fn)

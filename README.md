@@ -1,17 +1,20 @@
 # LLM Ops Hub
 
 A read-only hub for projects that keep their backlog in Git as JSON files. It
-reads the repository through a bare mirror and produces static HTML for humans
+reads each repository through a bare mirror and produces static HTML for humans
 and JSON for agents. It does not need a worktree and cannot write to the
-monitored repository.
+monitored repositories.
 
-Project identity, repository location, backlog ref, and runtime paths come
-from the instance configuration.
+Project identities, repository locations, backlog refs, and runtime paths come
+from the instance configuration. A project is an independent development
+initiative with its own repository and backlog. Its language, toolchain,
+runtime environments, and release cycle do not need to match the other
+projects monitored by the hub.
 
-One hub instance monitors one project. Run another instance with its own
-configuration and runtime paths for each additional project. Multi-project
-support would require a separate design. The current configuration has no
-multi-project mode.
+A schema-version 2 configuration monitors multiple projects and publishes a
+shared dashboard with a project picker. Each project keeps an isolated mirror,
+cache, and release history. Schema-version 1 single-project configurations
+remain supported.
 
 ## How it works
 
@@ -427,16 +430,19 @@ git clone <this-repo-url> && cd llm-ops-hub
 python3 -m pip install -r requirements.txt   # jsonschema; Python 3.9+
 python3 bin/hub.py self-test                 # no config or network needed
 cp config.example.json config.json && $EDITOR config.json
-python3 bin/hub.py sync                      # clone/fetch the bare mirror
-python3 bin/hub.py build                     # render a release, flip the symlink
+python3 bin/hub.py sync                      # clone/fetch every bare mirror
+python3 bin/hub.py build                     # render project releases and the shared dashboard
 python3 bin/hub.py serve                     # or install the systemd units
 ```
+
+Use `sync --project <id>` or `build --project <id>` for one configured
+project. The shared dashboard is refreshed after a selective build as well.
 
 For unattended operation, adjust the paths/user inside the `systemd/` units
 and install them: the timer runs sync+build every 2 minutes, the HTTP service
 serves the site LAN-only.
 
-If `project.github_repo` is set, enable the feedback loop:
+If a project's `github_repo` is set, enable the feedback loop:
 
 ```bash
 gh auth login    # a token with read scope is enough
@@ -447,15 +453,19 @@ gh label create backlog-feedback --repo <owner/repo> \
 The label must exist up front. GitHub silently drops unknown labels from
 prefilled issue links.
 
-`build` validates everything first and **refuses to render an invalid
-backlog**. The previous release stays live. Output: `index.html` (dashboard,
-including open feedback issues), `backlog.html` (table + item cards),
+`build` validates each project before rendering it and **refuses to render an
+invalid backlog**. A failing project keeps its previous release while the
+other projects continue to update. The root `index.html` is the shared
+dashboard. Each `projects/<id>/` directory contains `index.html` (project
+dashboard, including open feedback issues), `backlog.html` (table + item cards),
 `notes.html` (agent notes: browse/search, archive/delete via feedback
 issues), `done.html` (completed work grouped by month), `health.html`
 (report-only backlog and note findings), and
 `data/index.json` for agents (keys: `backlog` with the full items,
 `done`, `notes`, `health`, `related_notes`, `feedback_issues`,
 `feedback_error`, `ref`, `commit`, `generated_at`).
+The shared `data/projects.json` contains project availability, counts, refs,
+commits, build status, and the combined `priority: now` summaries.
 
 ## Configuration
 
@@ -467,15 +477,24 @@ to `config.json` for a local or deployment-specific instance.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `project.repo_url` | remote of the monitored repo (mirror source) | required |
-| `project.backlog_ref` | the single writable backlog branch | `main` |
-| `project.backlog_dir` | backlog path inside the repo | `docs/backlog` |
-| `project.github_repo` | `owner/repo` enabling the feedback loop (buttons on item cards, open `backlog-feedback` issues on the dashboard); omit to skip it (no `gh` needed) | unset |
-| `project.name` | display name in the rendered site | `Backlog` |
+| `schema_version` | `2` for `projects[]`; legacy single-project version `1` remains supported | required |
+| `projects[].id` | stable URL-safe project id using lowercase letters, digits, and hyphens | required |
+| `projects[].repo_url` | remote of this project's monitored repository | required |
+| `projects[].backlog_ref` | this project's single writable backlog branch | `main` |
+| `projects[].backlog_dir` | backlog path inside this project's repository | `docs/backlog` |
+| `projects[].github_repo` | `owner/repo` enabling the feedback loop for this project; omit to skip it | unset |
+| `projects[].name` | display name in the picker and rendered site | `Backlog` |
 | `paths.root` | runtime root | `~/.local/share/llm-ops-hub` |
-| `paths.mirror` / `cache` / `releases` / `public` | each path individually overridable; `{root}` placeholder supported | `{root}/...` |
+| `paths.cache` / `releases` / `public` | shared dashboard paths; `{root}` placeholder supported | `{root}/...` |
 | `server.host` / `server.port` | for `hub.py serve` | `127.0.0.1` / `8080` |
 | `build.releases_keep` | how many release directories to keep after a successful build (`0` = keep all) | `20` |
+
+Version 2 stores each project's mirror, cache, releases, and live symlink
+under `{root}/projects/<id>/`. A version 1 config still accepts `project` and
+the legacy `paths.mirror` override. To migrate manually, change
+`schema_version` to `2`, move the `project` object into a `projects` array,
+and add its `id`. No backlog files change, so no automated migration command
+is needed.
 
 ## Repository layout
 
@@ -499,17 +518,17 @@ applies to this repo and to the template pack shipped to projects.
 - The systemd timer runs `bin/sync_hub.sh` every 2 minutes; the HTTP service
   serves `public/` LAN-only. Generated sites can include security-sensitive
   backlog items. Keep them LAN-only.
-- `gh` (read scope) is needed only when `project.github_repo` is set.
+- `gh` (read scope) is needed only for projects with `github_repo` set.
 - Releases are immutable directories under `public_releases/`; `public` is a
   symlink flipped atomically after a successful build. `build` skips rendering
   when nothing changed since the last successful build. It compares the commit,
   feedback issues, tool, and config. Use `build --force` to override the check.
   Old release directories are pruned down to `build.releases_keep`.
-- `public/heartbeat.json` is the one mutable file in a release. It is
-  rewritten on every successful build attempt, including skipped builds. The
-  rendered pages show a staleness warning when the heartbeat is old, which
-  means the pipeline is down or failing. Old content alone does not trigger
-  the warning because a quiet backlog is not a failure.
+- `public/heartbeat.json` is the one mutable file in a release. When a live
+  release exists, every build attempt records success, skip, or failure. The
+  rendered pages show an immediate failure warning or a staleness warning when
+  checks stop running. Old content alone does not trigger the warning because
+  a quiet backlog is not a failure.
 
 ## Status
 

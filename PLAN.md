@@ -230,6 +230,10 @@ README now so nobody assumes otherwise. If multi-project support is ever
 accepted, it gets a separate design proposal before code changes; this plan
 does not reserve an abstraction for it.
 
+Superseded on 2026-08-22 after explicit acceptance. The project boundary,
+runtime isolation, GUI picker, migration path, and implementation scope are in
+`docs/proposals/2026-08-multi-project-hub.md`.
+
 ### 3.2 Contract migration story
 
 `schema_version: 1` is everywhere; nothing says what 2 means. Add one paragraph
