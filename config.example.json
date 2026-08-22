@@ -3,7 +3,6 @@
     "releases_keep": 20
   },
   "paths": {
-    "cache": "{root}/cache",
     "public": "{root}/public",
     "releases": "{root}/public_releases",
     "root": "~/.local/share/llm-ops-hub"

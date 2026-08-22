@@ -39,9 +39,9 @@ public -> public_releases/<release>
 ```
 
 Projects never share refs, validation state, caches, or release switches. A
-failed project build leaves its previous valid release live and does not stop
-other projects from updating. The shared dashboard records the partial failure
-instead of presenting the run as successful.
+failed project sync or build leaves its previous valid release live and does
+not stop other projects from updating. The shared dashboard records the
+partial failure instead of presenting the run as successful.
 
 ## Published interface
 
@@ -72,8 +72,9 @@ this change.
 `sync` and `build` process every configured project. `--project <id>` limits
 either command to one project. `serve` exposes the shared `public` tree.
 
-The systemd wrapper needs no new orchestration layer because its existing
-`sync` followed by `build` commands operate on the full configuration.
+The systemd wrapper records the aggregate sync status but runs `build` even
+when one remote failed. It returns a non-zero status after the build so the
+worker still reports the failed cycle.
 
 ## Verification
 

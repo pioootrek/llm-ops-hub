@@ -440,7 +440,9 @@ project. The shared dashboard is refreshed after a selective build as well.
 
 For unattended operation, adjust the paths/user inside the `systemd/` units
 and install them: the timer runs sync+build every 2 minutes, the HTTP service
-serves the site LAN-only.
+serves the site LAN-only. A partial sync failure is reported by the service,
+but the wrapper still runs `build` so projects with fresh mirrors can update
+and the shared heartbeat records the failure.
 
 If a project's `github_repo` is set, enable the feedback loop:
 
@@ -485,13 +487,14 @@ to `config.json` for a local or deployment-specific instance.
 | `projects[].github_repo` | `owner/repo` enabling the feedback loop for this project; omit to skip it | unset |
 | `projects[].name` | display name in the picker and rendered site | `Backlog` |
 | `paths.root` | runtime root | `~/.local/share/llm-ops-hub` |
-| `paths.cache` / `releases` / `public` | shared dashboard paths; `{root}` placeholder supported | `{root}/...` |
+| `paths.releases` / `paths.public` | shared dashboard paths; `{root}` placeholder supported | `{root}/...` |
 | `server.host` / `server.port` | for `hub.py serve` | `127.0.0.1` / `8080` |
 | `build.releases_keep` | how many release directories to keep after a successful build (`0` = keep all) | `20` |
 
 Version 2 stores each project's mirror, cache, releases, and live symlink
 under `{root}/projects/<id>/`. A version 1 config still accepts `project` and
-the legacy `paths.mirror` override. To migrate manually, change
+the legacy `paths.mirror`, `paths.cache`, `paths.releases`, and `paths.public`
+overrides. To migrate manually, change
 `schema_version` to `2`, move the `project` object into a `projects` array,
 and add its `id`. No backlog files change, so no automated migration command
 is needed.

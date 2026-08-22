@@ -290,7 +290,6 @@ def _resolve_hub_config(path: Path, raw: Any) -> dict[str, Any]:
         "projects": projects,
         "paths": {
             "root": root,
-            "cache": resolve("cache", "{root}/cache"),
             "releases": resolve("releases", "{root}/public_releases"),
             "public": resolve("public", "{root}/public"),
         },
@@ -1490,20 +1489,22 @@ def build_project(cfg: dict[str, Any], args: argparse.Namespace) -> int:
     os.replace(tmp_link, paths["public"])
     write_heartbeat(paths["public"], commit, "rendered")
     state_path.write_text(state_key, encoding="utf-8")
-    prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
+    if not cfg.get("multi_project"):
+        prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
     print(f"build: {label}{len(items)} items at {project['backlog_ref']} ({commit[:10]}) -> {paths['public']}")
     return 0
 
 
 def portfolio_summary(project: dict[str, Any]) -> dict[str, Any]:
-    index_path = project["paths"]["cache"] / "index.json"
+    public = project["paths"]["public"]
+    index_path = public / "data" / "index.json"
     summary = {
         "id": project["id"],
         "name": project["name"],
         "available": False,
         "href": f"projects/{project['id']}/index.html",
     }
-    if not index_path.is_file() or not project["paths"]["public"].exists():
+    if not public.exists() or not index_path.is_file():
         return summary
     try:
         data = parse_json(str(index_path), index_path.read_text(encoding="utf-8"))
@@ -1524,21 +1525,63 @@ def portfolio_summary(project: dict[str, Any]) -> dict[str, Any]:
         ],
         "ref": str(data.get("ref", project["backlog_ref"])),
     })
-    heartbeat_path = project["paths"]["public"] / "heartbeat.json"
+    heartbeat_path = public / "heartbeat.json"
     if heartbeat_path.is_file():
         try:
             heartbeat = parse_json(str(heartbeat_path), heartbeat_path.read_text(encoding="utf-8"))
-            summary["latest_build"] = "failed" if heartbeat.get("result") == "failed" else "ok"
+            if heartbeat.get("result") in {"failed", "rendered", "skipped"}:
+                summary["latest_build"] = heartbeat["result"]
         except (OSError, ContractError, AttributeError):
             pass
     return summary
 
 
-def render_portfolio(
+def portfolio_summaries(
     cfg: dict[str, Any], build_results: dict[str, int] | None = None
 ) -> list[dict[str, Any]]:
+    summaries = [portfolio_summary(project) for project in cfg["projects"]]
+    previous_path = cfg["paths"]["public"] / "data" / "projects.json"
+    previous_by_id: dict[str, dict[str, Any]] = {}
+    if previous_path.is_file():
+        try:
+            previous = parse_json(str(previous_path), previous_path.read_text(encoding="utf-8"))
+            previous_by_id = {
+                item["id"]: item
+                for item in previous.get("projects", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
+        except (OSError, ContractError, AttributeError):
+            pass
+    for summary in summaries:
+        previous = previous_by_id.get(summary["id"], {})
+        if not summary["available"] and previous.get("latest_build") == "failed":
+            summary["latest_build"] = "failed"
+        if build_results and build_results.get(summary["id"], 0) != 0:
+            summary["latest_build"] = "failed"
+    return summaries
+
+
+def portfolio_commit(summaries: list[dict[str, Any]]) -> str:
+    snapshot = [
+        {"commit": summary.get("commit", ""), "id": summary["id"]}
+        for summary in summaries
+    ]
+    return hashlib.sha256(canonical_json(snapshot).encode()).hexdigest()
+
+
+def selected_projects_all_skipped(
+    projects: list[dict[str, Any]], results: dict[str, int], summaries: list[dict[str, Any]]
+) -> bool:
+    summary_by_id = {summary["id"]: summary for summary in summaries}
+    return all(
+        results[project["id"]] == 0
+        and summary_by_id[project["id"]].get("latest_build") == "skipped"
+        for project in projects
+    )
+
+
+def render_portfolio(cfg: dict[str, Any], summaries: list[dict[str, Any]]) -> None:
     paths = cfg["paths"]
-    paths["cache"].mkdir(parents=True, exist_ok=True)
     paths["releases"].mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     release = paths["releases"] / stamp
@@ -1549,23 +1592,20 @@ def render_portfolio(
     (release / "projects").mkdir()
     (release / "assets/styles.css").write_text(CSS, encoding="utf-8")
 
-    summaries = [portfolio_summary(project) for project in cfg["projects"]]
-    for summary in summaries:
-        if build_results and summary["id"] in build_results:
-            summary["latest_build"] = "ok" if build_results[summary["id"]] == 0 else "failed"
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     portfolio_data = {"generated_at": generated_at, "projects": summaries, "schema_version": 1}
     payload = canonical_json(portfolio_data)
     (release / "data/projects.json").write_text(payload, encoding="utf-8")
-    (paths["cache"] / "projects.json").write_text(payload, encoding="utf-8")
 
     for project, summary in zip(cfg["projects"], summaries):
         if summary["available"]:
-            (release / "projects" / project["id"]).symlink_to(project["paths"]["public"], target_is_directory=True)
+            live_release = project["paths"]["public"].resolve(strict=True)
+            (release / "projects" / project["id"]).symlink_to(live_release, target_is_directory=True)
 
     options = '<option value="index.html" selected>All projects</option>' + "".join(
-        f'<option value="projects/{h(project["id"])}/index.html">{h(project["name"])}</option>'
-        for project in cfg["projects"]
+        f'<option value="projects/{h(project["id"])}/index.html"'
+        f'{"" if summary["available"] else " disabled"}>{h(project["name"])}</option>'
+        for project, summary in zip(cfg["projects"], summaries)
     )
     cards = []
     now_rows = []
@@ -1606,7 +1646,7 @@ def render_portfolio(
     )
     html_page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>All projects · LLM Ops Hub</title><link rel="stylesheet" href="assets/styles.css"></head>
+<title>All projects · LLM Ops Hub</title><link rel="stylesheet" href="assets/styles.css?v={h(generated_at)}"></head>
 <body><header><div class="project-brand"><strong>LLM Ops Hub</strong><span>read-only · git is the source of truth</span></div>
 <label class="project-picker"><span>Project</span><select data-project-switch>{options}</select></label></header>
 <main><div id="stale-banner" class="warn" data-stale-after="{STALE_AFTER_MINUTES}" hidden></div>{body}</main>
@@ -1620,20 +1660,40 @@ def render_portfolio(
     tmp_link.symlink_to(release, target_is_directory=True)
     os.replace(tmp_link, paths["public"])
     prune_releases(paths["releases"], release, cfg["build"]["releases_keep"])
-    return summaries
+
+
+def prune_project_releases(cfg: dict[str, Any]) -> None:
+    keep = cfg["build"]["releases_keep"]
+    for project in cfg["projects"]:
+        paths = project["paths"]
+        if paths["public"].exists() and paths["releases"].is_dir():
+            prune_releases(paths["releases"], paths["public"].resolve(strict=True), keep)
 
 
 def cmd_build(args: argparse.Namespace) -> int:
     cfg = load_hub_config(args.config)
+    projects = selected_projects(cfg, getattr(args, "project", None))
     if not cfg["multi_project"]:
         return build_project(cfg, args)
     results: dict[str, int] = {}
-    for project in selected_projects(cfg, getattr(args, "project", None)):
+    for project in projects:
         results[project["id"]] = build_project(project_instance_config(cfg, project), args)
-    summaries = render_portfolio(cfg, results)
-    commits = "".join(portfolio_summary(project).get("commit", "") for project in cfg["projects"])
-    result = "partial-failure" if any(summary.get("latest_build") == "failed" for summary in summaries) else "rendered"
-    write_heartbeat(cfg["paths"]["public"], hashlib.sha256(commits.encode()).hexdigest(), result)
+    summaries = portfolio_summaries(cfg, results)
+    sync_failed = os.environ.get("LLM_OPS_HUB_SYNC_FAILED") == "1"
+    partial_failure = sync_failed or any(
+        summary.get("latest_build") == "failed" for summary in summaries
+    )
+    all_skipped = selected_projects_all_skipped(projects, results, summaries)
+    if all_skipped and not args.force and cfg["paths"]["public"].exists():
+        result = "partial-failure" if partial_failure else "skipped"
+        write_heartbeat(cfg["paths"]["public"], portfolio_commit(summaries), result)
+        prune_project_releases(cfg)
+        print("build: portfolio has no changes; keeping current release")
+        return max(results.values(), default=0)
+    render_portfolio(cfg, summaries)
+    result = "partial-failure" if partial_failure else "rendered"
+    write_heartbeat(cfg["paths"]["public"], portfolio_commit(summaries), result)
+    prune_project_releases(cfg)
     return max(results.values(), default=0)
 
 
@@ -1684,7 +1744,7 @@ STALE_AFTER_MINUTES = 15
 
 # The banner alarms on heartbeat age (pipeline health), never on snapshot age:
 # a backlog with no commits for hours is healthy, a heartbeat that old is not.
-# heartbeat.json is rewritten by every successful build attempt, skips included.
+# When a live release exists, heartbeat.json records every build attempt.
 STALE_SCRIPT = """
 <script>
 (function () {
@@ -1708,21 +1768,25 @@ STALE_SCRIPT = """
       banner.hidden = true;
       return;
     }
-    if (result === "failed" || result === "partial-failure") {
-      banner.textContent = result === "failed"
-        ? "The latest build failed. This is the previous valid release."
-        : "One or more projects failed their latest build. Previous valid releases remain available.";
+    const minutes = Math.round((Date.now() - checkedAt) / 60000);
+    const failed = result === "failed" || result === "partial-failure";
+    if (minutes >= limit) {
+      const failure = failed
+        ? "The latest sync/build check failed. Previous valid releases remain available. "
+        : "";
+      banner.textContent = failure + "No sync/build check has completed for " + minutes
+        + " minutes. The pipeline may be down.";
       banner.hidden = false;
       return;
     }
-    const minutes = Math.round((Date.now() - checkedAt) / 60000);
-    if (minutes < limit) {
-      banner.hidden = true;
+    if (failed) {
+      banner.textContent = result === "failed"
+        ? "The latest build failed. This is the previous valid release."
+        : "One or more project sync/build checks failed. Previous valid releases remain available.";
+      banner.hidden = false;
       return;
     }
-    banner.textContent = "Last successful sync/build check was " + minutes
-      + " minutes ago — the pipeline may be down or failing.";
-    banner.hidden = false;
+    banner.hidden = true;
   }
   check();
   setInterval(check, 60000);
@@ -1796,8 +1860,8 @@ def page(
             "done": "done.html", "health": "health.html",
         }.get(active, "index.html")
         options = '<option value="../../index.html">All projects</option>' + "".join(
-            f'<option value="../{h(project["id"])}/{page_name}"'
-            f'{" selected" if project["id"] == project_id else ""}>{h(project["name"])}</option>'
+            f'<option data-project-id="{h(project["id"])}" value="../{h(project["id"])}/{page_name}"'
+            f'{" selected" if project["id"] == project_id else " disabled"}>{h(project["name"])}</option>'
             for project in projects
         )
         picker = (
@@ -1805,10 +1869,17 @@ def page(
             f'<select data-project-switch>{options}</select></label>'
         )
         picker_script = """<script>
-document.querySelector('[data-project-switch]').addEventListener('change', function () {
-  try { localStorage.setItem('llm-ops-hub-project', this.value); } catch (error) {}
-  location.href = this.value;
-});
+const projectSwitch = document.querySelector('[data-project-switch]');
+projectSwitch.addEventListener('change', function () { location.href = this.value; });
+fetch('../../data/projects.json', { cache: 'no-store' })
+  .then((response) => response.ok ? response.json() : Promise.reject())
+  .then((data) => {
+    const available = new Set(data.projects.filter((project) => project.available).map((project) => project.id));
+    projectSwitch.querySelectorAll('[data-project-id]').forEach((option) => {
+      if (!option.selected) option.disabled = !available.has(option.dataset.projectId);
+    });
+  })
+  .catch(() => {});
 </script>"""
     identity = (
         f'<div class="header-identity"><div class="project-brand"><strong>LLM Ops Hub</strong>'
@@ -4821,6 +4892,12 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "schema/note.schema.json",
         "schema/docs-header.schema.json",
     }, "build state key must include bundled schema hashes"
+    sync_wrapper = (TOOL_ROOT / "bin/sync_hub.sh").read_text(encoding="utf-8")
+    assert "sync || sync_status=$?" in sync_wrapper
+    assert "LLM_OPS_HUB_SYNC_FAILED=1" in sync_wrapper
+    assert sync_wrapper.index("sync || sync_status=$?") < sync_wrapper.index('bin/hub.py" build'), (
+        "the worker wrapper must run build even after a partial sync failure"
+    )
 
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "git@example.com:x.git"}})
     assert cfg["project"]["backlog_ref"] == "main", "backlog_ref default must be main"
@@ -4830,6 +4907,12 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         "runtime root default must use the generic LLM Ops Hub data directory"
     )
     assert cfg["paths"]["mirror"] == cfg["paths"]["root"] / "mirror.git", "mirror default must live under root"
+    try:
+        selected_projects(cfg, "bogus")
+    except ConfigError:
+        pass
+    else:
+        raise AssertionError("schema-version 1 config silently accepted --project")
     cfg = _resolve_hub_config(Path("test-config.json"), {"schema_version": 1, "project": {"repo_url": "x"}, "build": {"releases_keep": -5}})
     assert cfg["build"]["releases_keep"] == 0, "negative releases_keep must clamp to 0"
     with tempfile.TemporaryDirectory() as tmp:
@@ -4839,9 +4922,10 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
             "projects": [
                 {"id": "app", "name": "App", "repo_url": "git@example.com:app.git"},
                 {"id": "infra", "name": "Infrastructure", "repo_url": "git@example.com:infra.git", "backlog_dir": "ops/backlog"},
+                {"id": "never", "name": "Never built", "repo_url": "git@example.com:never.git"},
             ],
         })
-        assert multi_cfg["multi_project"] and len(multi_cfg["projects"]) == 2
+        assert multi_cfg["multi_project"] and len(multi_cfg["projects"]) == 3
         assert multi_cfg["projects"][0]["paths"]["mirror"] == Path(tmp) / "projects" / "app" / "mirror.git"
         assert multi_cfg["projects"][1]["backlog_dir"] == "ops/backlog"
         assert selected_projects(multi_cfg, "infra")[0]["name"] == "Infrastructure"
@@ -4849,11 +4933,15 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
             "App", "Backlog", "", active="backlog", projects=multi_cfg["projects"], project_id="app"
         )
         assert '<option value="../../index.html">All projects</option>' in picker_html
-        assert '<option value="../infra/backlog.html">Infrastructure</option>' in picker_html
+        assert 'data-project-id="infra" value="../infra/backlog.html" disabled' in picker_html
+        assert "fetch('../../data/projects.json'" in picker_html
+        assert "localStorage" not in picker_html
 
-        for project in multi_cfg["projects"]:
-            project["paths"]["cache"].mkdir(parents=True)
-            project["paths"]["public"].mkdir(parents=True)
+        for project in multi_cfg["projects"][:2]:
+            live_release = project["paths"]["releases"] / "test-release"
+            (live_release / "data").mkdir(parents=True)
+            project["paths"]["public"].parent.mkdir(parents=True, exist_ok=True)
+            project["paths"]["public"].symlink_to(live_release, target_is_directory=True)
             test_index = {
                 "backlog": [{
                     "id": f"FEAT-20260703-{project['id']}", "priority": "now",
@@ -4862,21 +4950,46 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
                 "commit": "abcdef123456", "generated_at": "2026-07-03T12:00:00+00:00",
                 "health": {"item_findings": [], "note_findings": []}, "ref": "main",
             }
-            (project["paths"]["cache"] / "index.json").write_text(canonical_json(test_index), encoding="utf-8")
-        render_portfolio(multi_cfg)
+            (project["paths"]["public"] / "data/index.json").write_text(
+                canonical_json(test_index), encoding="utf-8"
+            )
+        stale_cache = multi_cfg["projects"][0]["paths"]["cache"] / "index.json"
+        stale_cache.parent.mkdir(parents=True)
+        stale_cache.write_text(canonical_json({"backlog": []}), encoding="utf-8")
+        summaries = portfolio_summaries(multi_cfg)
+        assert summaries[0]["active"] == 1, "portfolio must read the live release, not stale cache"
+        render_portfolio(multi_cfg, summaries)
         portfolio = parse_json(
             "portfolio", (multi_cfg["paths"]["public"] / "data/projects.json").read_text(encoding="utf-8")
         )
-        assert [project["id"] for project in portfolio["projects"]] == ["app", "infra"]
-        assert all(project["active"] == 1 for project in portfolio["projects"])
+        assert [project["id"] for project in portfolio["projects"]] == ["app", "infra", "never"]
+        assert all(project["active"] == 1 for project in portfolio["projects"][:2])
+        assert not portfolio["projects"][2]["available"]
         assert (multi_cfg["paths"]["public"] / "projects/app").is_symlink()
-        assert "All projects" in (multi_cfg["paths"]["public"] / "index.html").read_text(encoding="utf-8")
+        assert (multi_cfg["paths"]["public"] / "projects/app").readlink() == (
+            multi_cfg["projects"][0]["paths"]["public"].resolve(strict=True)
+        ), "portfolio release must pin the current project release, not its mutable public symlink"
+        assert not (multi_cfg["paths"]["public"] / "projects/never").exists()
+        portfolio_html = (multi_cfg["paths"]["public"] / "index.html").read_text(encoding="utf-8")
+        assert "All projects" in portfolio_html
+        assert 'value="projects/never/index.html" disabled' in portfolio_html
+        assert 'assets/styles.css?v=' in portfolio_html
         write_heartbeat(multi_cfg["projects"][1]["paths"]["public"], "abcdef123456", "failed")
-        summaries = render_portfolio(multi_cfg, {"app": 0})
+        summaries = portfolio_summaries(multi_cfg, {"app": 0, "never": 1})
         assert summaries[1]["latest_build"] == "failed", "selective build must preserve another project's failure"
+        render_portfolio(multi_cfg, summaries)
+        carried = portfolio_summaries(multi_cfg, {"app": 0})
+        assert carried[2]["latest_build"] == "failed", "unavailable project failure must survive a selective build"
         portfolio_html = (multi_cfg["paths"]["public"] / "index.html").read_text(encoding="utf-8")
         assert "Latest build failed. Showing the previous valid release." in portfolio_html
         assert 'result === "failed"' in STALE_SCRIPT, "project pages must reveal a fresh failed build"
+        assert "minutes >= limit" in STALE_SCRIPT, "staleness must take priority over a persistent failure"
+        skipped = [
+            {"available": True, "id": "app", "latest_build": "skipped"},
+            {"available": True, "id": "infra", "latest_build": "rendered"},
+        ]
+        assert selected_projects_all_skipped([multi_cfg["projects"][0]], {"app": 0}, skipped)
+        assert not selected_projects_all_skipped(multi_cfg["projects"][:2], {"app": 0, "infra": 0}, skipped)
 
     for bad_cfg in [
         {"schema_version": 1},
