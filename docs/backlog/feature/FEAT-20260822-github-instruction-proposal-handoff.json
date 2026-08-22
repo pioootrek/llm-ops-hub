@@ -1,0 +1,44 @@
+{
+  "area": "instruction-explorer",
+  "created": "2026-08-22",
+  "id": "FEAT-20260822-github-instruction-proposal-handoff",
+  "links": {
+    "prs": [],
+    "related_ids": []
+  },
+  "notes": [
+    {
+      "author": "human:pioootrek",
+      "date": "2026-08-22",
+      "text": "Preserve the read-only hub boundary. The selected handoff must not give the deployed hub repository write credentials."
+    }
+  ],
+  "priority": "next",
+  "problem": [
+    "Instruction Explorer can export a checked patch, but handing that patch to a GitHub-backed project still requires a manual transfer outside the product flow."
+  ],
+  "risk": {
+    "dimensions": [
+      "external-integration",
+      "process"
+    ],
+    "level": "medium",
+    "rollback": "Disable the GitHub-specific handoff and retain the existing copy, download, and git apply workflow."
+  },
+  "schema_version": 1,
+  "scope": [
+    "Choose and document a GitHub handoff that keeps repository mutation outside the deployed hub, then implement the smallest static-browser flow needed to initiate it.",
+    "Carry the immutable base commit and source hash through the handoff, and keep stale-base checks visible to the receiving workflow."
+  ],
+  "source": "docs/proposals/2026-08-instruction-explorer.md phase 3",
+  "status": "open",
+  "title": "Add a read-only GitHub handoff for instruction patches",
+  "type": "feature",
+  "validation": [
+    "An end-to-end fixture exports a proposal, initiates the selected GitHub handoff, and proves that the hub process holds no repository write token.",
+    "Stale base metadata, oversized content, and malformed targets are rejected or shown as explicit blocking states."
+  ],
+  "value": [
+    "A reviewed browser draft can enter the normal GitHub workflow without copying an untraceable patch between tools."
+  ]
+}

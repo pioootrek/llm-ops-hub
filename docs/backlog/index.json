@@ -1,0 +1,27 @@
+{
+  "generated_by": "hub.py fmt",
+  "items": [
+    {
+      "area": "instruction-explorer",
+      "id": "FEAT-20260822-github-instruction-proposal-handoff",
+      "path": "feature/FEAT-20260822-github-instruction-proposal-handoff.json",
+      "priority": "next",
+      "risk_level": "medium",
+      "status": "open",
+      "title": "Add a read-only GitHub handoff for instruction patches",
+      "type": "feature"
+    },
+    {
+      "area": "instruction-explorer",
+      "id": "FEAT-20260822-claude-instruction-profile",
+      "path": "feature/FEAT-20260822-claude-instruction-profile.json",
+      "priority": "later",
+      "risk_level": "medium",
+      "status": "open",
+      "title": "Add a versioned Claude instruction profile",
+      "type": "feature"
+    }
+  ],
+  "notes": [],
+  "schema_version": 1
+}

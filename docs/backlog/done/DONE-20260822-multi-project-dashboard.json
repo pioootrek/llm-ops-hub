@@ -1,0 +1,21 @@
+{
+  "changed": [
+    "PR #8",
+    "schema version 2 hub configuration",
+    "shared portfolio dashboard and isolated project releases"
+  ],
+  "date": "2026-08-22",
+  "followup_ids": [],
+  "id": "DONE-20260822-multi-project-dashboard",
+  "schema_version": 1,
+  "source": "docs/proposals/2026-08-multi-project-hub.md",
+  "summary": [
+    "The hub can monitor independent repositories in one read-only portfolio. Each project has an isolated mirror, cache, release history, heartbeat, and stable picker destination.",
+    "A failed or unavailable project retains its previous valid release and does not prevent healthy projects from publishing."
+  ],
+  "title": "Shipped the multi-project dashboard",
+  "validation": [
+    "PR #8 passed the self-test workflow on Python 3.9 and the current Python 3 release before merge.",
+    "End-to-end fixtures covered full and selective builds, no-op publication, pinned releases, unavailable projects, and partial sync failure."
+  ]
+}
