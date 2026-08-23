@@ -1953,6 +1953,7 @@ CSS = """/* LLM Ops Hub stylesheet - sections: tokens, base, header/nav, layout,
   --warn-bg: var(--tone-amber-bg); --warn-border: var(--tone-amber-border); --warn-fg: var(--tone-amber-fg);
   --radius: 10px;
   --radius-sm: 8px;
+  --header-h: 72px;
   --shadow: 0 1px 2px rgba(24, 24, 27, 0.05);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -2018,11 +2019,10 @@ pre {
   background: var(--muted-bg); padding: 12px 14px; margin: 8px 0; overflow-x: auto;
 }
 .skip-link {
-  position: absolute; left: 16px; top: -64px; z-index: 60;
+  position: fixed; left: 16px; top: -64px; z-index: 60;
   background: var(--accent); color: var(--on-accent);
   padding: 8px 14px; border-radius: var(--radius-sm);
   font-size: 13px; font-weight: 600; text-decoration: none;
-  transition: top 0.15s ease;
 }
 .skip-link:focus { top: 10px; }
 
@@ -2033,7 +2033,7 @@ header {
   backdrop-filter: saturate(180%) blur(12px);
   -webkit-backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--border);
-  padding: 10px 24px; min-height: 58px;
+  padding: 10px 24px; min-height: var(--header-h);
   display: flex; justify-content: space-between; gap: 16px; align-items: center;
 }
 header strong { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
@@ -2079,7 +2079,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 26px 24px 72px; }
   box-shadow: var(--shadow);
 }
 .card h2 { font-size: 15px; line-height: 1.3; margin: 0 0 10px; font-weight: 650; }
-.grid > .card > h2 {
+.dash-cards > .card > h2 {
   font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--label); font-weight: 650; margin-bottom: 6px;
 }
@@ -2151,8 +2151,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .backlog-list {
   border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--card); box-shadow: var(--shadow); overflow: auto;
+  max-height: calc(100vh - var(--header-h) - 30px);
 }
-.detail-pane { position: sticky; top: 76px; max-height: calc(100vh - 96px); overflow: auto; }
+.detail-pane { position: sticky; top: calc(var(--header-h) + 10px); max-height: calc(100vh - var(--header-h) - 30px); overflow: auto; }
 .detail-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 8px; }
 .detail-header h2 { font-size: 12px; margin: 0; text-transform: uppercase; letter-spacing: 0.05em; color: var(--label); font-weight: 650; }
 .detail-pane .empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 18px; background: var(--card); }
@@ -2165,7 +2166,7 @@ tbody tr:last-child td { border-bottom: 0; }
 td:first-child .item-title-link { font-family: var(--mono); font-size: 12.5px; }
 .item-title-link { color: var(--foreground); text-decoration: none; font-weight: 550; }
 .item-title-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-.item-detail { scroll-margin-top: 92px; }
+.item-detail { scroll-margin-top: calc(var(--header-h) + 26px); }
 .item-detail h3 { border-top: 1px solid var(--border); padding-top: 12px; }
 .note-human { border-left: 3px solid var(--accent); padding-left: 9px; font-size: 13px; }
 .item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -2213,7 +2214,7 @@ td:first-child .item-title-link { font-family: var(--mono); font-size: 12.5px; }
 }
 .queue-list .pill { margin-left: auto; flex: none; }
 .note-entry h2, .done-entry h2 { overflow-wrap: anywhere; }
-.done-month { position: sticky; top: 58px; z-index: 5; background: var(--background); padding: 8px 0 6px; margin: 10px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--label); }
+.done-month { position: sticky; top: calc(var(--header-h) + 2px); z-index: 5; background: var(--background); padding: 8px 0 6px; margin: 10px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--label); }
 
 /* ---- instruction explorer ---------------------------------------------------- */
 .instruction-explorer {
@@ -2341,7 +2342,9 @@ td:first-child .item-title-link { font-family: var(--mono); font-size: 12.5px; }
   .control, .control:first-child { flex: 1 1 45%; max-width: none; }
   .toolbar-actions { margin-left: 0; width: 100%; }
   .backlog-layout { grid-template-columns: 1fr; }
+  .backlog-list { max-height: none; }
   .detail-pane { position: static; max-height: none; }
+  .done-month { position: static; }
   .instruction-explorer { grid-template-columns: 1fr; }
   .instruction-navigator { border-right: 0; border-bottom: 1px solid var(--border); }
   .instruction-tree-scroll { max-height: 300px; }
@@ -2354,6 +2357,7 @@ td:first-child .item-title-link { font-family: var(--mono); font-size: 12.5px; }
 @media (prefers-reduced-motion: no-preference) {
   .instruction-draft:not([hidden]) { animation: instruction-draft-in 0.16s ease-out; }
   .instruction-source-block { transition: box-shadow 0.15s ease, padding-left 0.15s ease; }
+  .skip-link { transition: top 0.15s ease; }
 }
 @keyframes instruction-draft-in { from { opacity: 0.4; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 """
@@ -3846,8 +3850,11 @@ def render_site(
         if acceptance_state != "none":
             acceptance_counts[acceptance_state] = acceptance_counts.get(acceptance_state, 0) + 1
 
-    def pills(counter: dict[str, int]) -> str:
-        return "".join(f"<span class=pill>{h(k)}: {v}</span>" for k, v in sorted(counter.items()))
+    def pills(counter: dict[str, int], kind: str = "") -> str:
+        return "".join(
+            f'<span class="pill{f" {kind}-{h(k)}" if kind else ""}">{h(k)}: {v}</span>'
+            for k, v in sorted(counter.items())
+        )
 
     latest_done = f"latest: {h(done_entries[0]['date'])}" if done_entries else "no entries yet"
     archived_note = (
@@ -3863,21 +3870,21 @@ def render_site(
         + "</div></div>"
     )
     home = [
-        card("Backlog", f"<p><span class=stat>{len(active_items)}</span><span class=muted>active items</span></p><p>{pills(by_status)}</p><p>{pills(by_priority)}</p>{archived_note}<p><a href=backlog.html>Open backlog →</a></p>"),
+        card("Backlog", f"<p><span class=stat>{len(active_items)}</span> <span class=muted>active items</span></p><p>{pills(by_status, 'status')}</p><p>{pills(by_priority, 'priority')}</p>{archived_note}<p><a href=backlog.html>Open backlog →</a></p>"),
         card(
             "Risk",
-            f"<p><span class=stat>{high_risk}</span><span class=muted>high-risk item(s)</span></p>"
+            f"<p><span class=stat>{high_risk}</span> <span class=muted>high-risk item(s)</span></p>"
             f"<p>{pills(acceptance_counts) or '<span class=muted>No risk acceptances.</span>'}</p>"
             '<p><a href="backlog.html?risk=high">View high-risk →</a></p>',
         ),
-        card("Done", f"<p><span class=stat>{len(done_entries)}</span><span class=muted>completed-work entries</span></p><p class=muted>{latest_done}</p><p><a href=done.html>View done →</a></p>"),
+        card("Done", f"<p><span class=stat>{len(done_entries)}</span> <span class=muted>completed-work entries</span></p><p class=muted>{latest_done}</p><p><a href=done.html>View done →</a></p>"),
         card("Notes", (
-            f"<p><span class=stat>{sum(1 for n in notes if n['status'] == 'active')}</span><span class=muted>active agent note(s)</span></p>"
+            f"<p><span class=stat>{sum(1 for n in notes if n['status'] == 'active')}</span> <span class=muted>active agent note(s)</span></p>"
             + (f"<p class=muted>latest: {h(notes[0]['created'])}</p>" if notes else "")
             + "<p><a href=notes.html>Browse notes →</a></p>"
         )),
         card("Health", (
-            f'<p><span class=stat>{len(health["item_findings"]) + len(health["note_findings"])}</span><span class=muted>open finding(s)</span></p>'
+            f'<p><span class=stat>{len(health["item_findings"]) + len(health["note_findings"])}</span> <span class=muted>open finding(s)</span></p>'
             f'<p class=muted>{len(health["item_findings"])} backlog · {len(health["note_findings"])} notes to review</p>'
             '<p><a href=health.html>Open health report →</a></p>'
         )),
@@ -3894,7 +3901,7 @@ def render_site(
             if count
         )
         docs_summary = (
-            f"<p><span class=stat>{len(docs)}</span><span class=muted>pages in <code>{h(docs_cfg['dir'])}</code></span></p><p>{pills(docs_report['by_status'])}</p>"
+            f"<p><span class=stat>{len(docs)}</span> <span class=muted>pages in <code>{h(docs_cfg['dir'])}</code></span></p><p>{pills(docs_report['by_status'])}</p>"
             + (f"<p>{finding_pills}</p>" if finding_pills else "<p class=muted>No findings.</p>")
             + "<p><a href=docs.html>Open docs health →</a></p>"
         )
@@ -3902,7 +3909,7 @@ def render_site(
     if with_instructions:
         home.insert(5, card(
             "Instruction sources",
-            f'<p><span class=stat>{len(instructions_report["sources"])}</span><span class=muted>instruction source(s)</span></p>'
+            f'<p><span class=stat>{len(instructions_report["sources"])}</span> <span class=muted>instruction source(s)</span></p>'
             f'<p class=muted>{len(instructions_report["directories"])} mapped directorie(s).</p>'
             '<p><a href=instructions.html>Open instruction map →</a></p>',
         ))
@@ -3912,7 +3919,7 @@ def render_site(
         )
         home.insert(2, card(
             "Feedback",
-            f"<p><span class=stat>{len(issues)}</span><span class=muted>open <code>{FEEDBACK_LABEL}</code> issue(s) waiting to be applied</span></p>"
+            f"<p><span class=stat>{len(issues)}</span> <span class=muted>open <code>{FEEDBACK_LABEL}</code> issue(s) waiting to be applied</span></p>"
             + issue_links
             + (f"<p class=warn>{h(issue_error)}</p>" if issue_error else ""),
         ))
@@ -3931,7 +3938,7 @@ def render_site(
         page(
             name,
             "Dashboard",
-            home_heading + f"<section class=grid>{''.join(home)}</section><section class=dash-queue>{queue_card}</section>",
+            home_heading + f"<section class=\"grid dash-cards\">{''.join(home)}</section><section class=dash-queue>{queue_card}</section>",
             active="home",
             generated_at=generated_at,
             css_version=css_version,
@@ -3981,6 +3988,7 @@ document.documentElement.classList.add("js");
   const details = Array.from(document.querySelectorAll(".item-detail"));
   const emptyState = document.getElementById("empty-filter-state");
   const closeDetails = document.getElementById("close-details");
+  const detailPane = document.querySelector(".detail-pane");
   const viewToggle = document.getElementById("toggle-details");
   const clearFilters = document.getElementById("clear-filters");
   const controls = {
@@ -4042,6 +4050,7 @@ document.documentElement.classList.add("js");
       row.setAttribute("aria-selected", selected ? "true" : "false");
     });
     details.forEach((detail) => detail.classList.toggle("active", detail.dataset.itemId === id));
+    if (detailPane) detailPane.scrollTop = 0;
     if (updateHash) history.replaceState(null, "", "#" + encodeURIComponent(id));
   }
 
@@ -4722,9 +4731,16 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
         rendered_home = (tmp_path / "site/index.html").read_text(encoding="utf-8")
         assert "<main id=main>" in rendered_home and "class=skip-link" in rendered_home
         assert "page-heading" in rendered_home and "class=stat" in rendered_home
+        assert 'class="grid dash-cards"' in rendered_home, "stat styling must stay scoped to the dashboard"
+        assert 'class="pill status-in-progress">in-progress: 1' in rendered_home
+        assert 'class="pill priority-now">now: 1' in rendered_home
+        assert "</span> <span class=muted>" in rendered_home, "stat number needs a text separator from its label"
         rendered_backlog = (tmp_path / "site/backlog.html").read_text(encoding="utf-8")
         assert 'class="pill priority-now"' in rendered_backlog
         assert 'class="pill status-in-progress"' in rendered_backlog
+        assert "detailPane.scrollTop = 0" in rendered_backlog, (
+            "switching items must reset the detail pane scroll position"
+        )
         assert ".pill.priority-now" in CSS and ".pill.status-blocked" in CSS
         assert "--accent:" in CSS and "prefers-color-scheme: dark" in CSS
 
