@@ -19,6 +19,13 @@ tool mirrors the project repo, validates the contract, and renders static
 HTML for humans plus JSON for agents. User-facing documentation lives in
 `README.md`; this file is the rulebook for changing the code.
 
+The Hub's own development backlog is in Worktree Switcher Knowledge project
+`llm-ops-hub`. Before planning work, updating tasks or recording findings,
+read `docs/backlog/AGENTS.md` and the current Knowledge records. The files in
+this repository's `docs/backlog/` are the imported archive. This project-local
+cutover does not change the Hub product's Git-backed contract for other
+monitored projects or its reusable templates.
+
 ## Single source of truth for instructions
 
 - Every `AGENTS.md` is the only place its rules are written.
