@@ -16,8 +16,11 @@ Create tasks with `knowledge_create_task`, including the concrete problem,
 expected value, bounded scope, validation and risk. Choose open work by
 priority: `now`, then `next`, then `later`. Use `knowledge_update_task` with
 the current revision to set `in_progress`, `blocked` with its unblock
-condition, or `done` after verification. Record outcome and evidence in a
-linked discussion and read the saved task back before reporting completion.
+condition, or `done` after verification. Append outcome, validation and limits
+to the task description while preserving its existing content. If
+`knowledge_relations` returns an existing linked discussion, append a reply
+there as well. Read the saved task back before reporting completion. The
+current MCP API cannot link an arbitrary new discussion to an existing task.
 
 Append discussion replies rather than rewriting history. Reuse the same
 idempotency key when retrying a write, and re-read after revision conflicts.
@@ -55,9 +58,26 @@ The shared venv supplies dependencies; `bin/hub.py` is the current checkout's
 implementation. `fmt` owns `index.json`; never edit it by hand or weaken
 schemas. Preserve `CLAUDE.md` companions containing `@AGENTS.md`.
 
-Human feedback issues labelled `backlog-feedback` remain input. Record
-accepted task changes and evidence in Knowledge, then reference the resulting
-record when closing the issue through the authorized workflow.
+Human feedback issues labelled `backlog-feedback` remain input, including
+issues opened from old Hub cards. Those cards and `data/index.json` show the
+frozen Git snapshot: their open/stale status and promise of a repository
+backlog commit do not describe current work. Do not select work from that
+snapshot without reading Knowledge first.
+
+For an instance that keeps displaying a migrated project, label its configured
+display name as an archive with current work in Knowledge, and omit the
+optional `github_repo` setting to stop offering new file-backlog feedback
+actions. Rebuild the instance after that configuration change. Existing
+feedback issues still follow the mapping below; do not erase historical open
+statuses merely to make the archive look current.
+
+To process feedback carrying a legacy `FEAT-*` or other imported ID, call
+`knowledge_search` with `projectId: "llm-ops-hub"`, `kind: "task"`,
+`legacyId` set to that ID and `includeInactive: true`. Read the returned task
+using its service record ID and current revision. If no unique match exists,
+inspect import provenance before writing; do not create a duplicate task.
+Record accepted changes and evidence in Knowledge, then reference the
+resulting record when closing the issue through the authorized workflow.
 
 Never store secrets, credentials or private customer data in Knowledge or
 repository documentation.
