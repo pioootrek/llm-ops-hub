@@ -72,12 +72,19 @@ feedback issues still follow the mapping below; do not erase historical open
 statuses merely to make the archive look current.
 
 To process feedback carrying a legacy `FEAT-*` or other imported ID, call
-`knowledge_search` with `projectId: "llm-ops-hub"`, `kind: "task"`,
-`legacyId` set to that ID and `includeInactive: true`. Read the returned task
-using its service record ID and current revision. If no unique match exists,
-inspect import provenance before writing; do not create a duplicate task.
-Record accepted changes and evidence in Knowledge, then reference the
-resulting record when closing the issue through the authorized workflow.
+`knowledge_search` with `projectId: "llm-ops-hub"`, `query` set to that ID
+and `includeInactive: true`. For a matching imported discussion, read it and
+call `knowledge_relations` with its `recordId` and `recordKind: "thread"`
+to find the related task. If this gives no unique task, search
+`knowledge_tasks` with the archived item's title and `activeOnly: false`,
+following pagination and checking candidate descriptions. Read the matched
+task using its service record ID and current revision before writing.
+
+The `legacyId` search filter currently works only for memories; it excludes
+tasks and discussions. An empty result is not proof that a task is absent.
+Report an unresolved or ambiguous match rather than creating a duplicate.
+Record accepted changes and evidence in Knowledge, then reference the saved
+record when closing the issue through the authorized workflow.
 
 Never store secrets, credentials or private customer data in Knowledge or
 repository documentation.
