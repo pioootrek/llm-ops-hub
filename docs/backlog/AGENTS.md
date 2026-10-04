@@ -42,11 +42,18 @@ a read-only Git-backed product for projects using that contract. Do not
 change `templates/AGENTS.md`, schemas or generic onboarding merely because
 the Hub's own backlog moved to Knowledge.
 
-For repository documentation changes, run the canonical Hub `fmt` and
-`validate` commands against this archive. Use the repository venv or the
-configured Hub venv in an isolated worktree. `fmt` owns `index.json`; never
-edit it by hand or weaken schemas. Run the root guide's `self-test` before
-committing, and preserve `CLAUDE.md` companions containing `@AGENTS.md`.
+For repository documentation changes, run from the checkout root:
+
+```bash
+HUB_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+"$HUB_ROOT/.venv/bin/python" bin/hub.py fmt --backlog-dir docs/backlog
+"$HUB_ROOT/.venv/bin/python" bin/hub.py validate --backlog-dir docs/backlog
+"$HUB_ROOT/.venv/bin/python" bin/hub.py self-test
+```
+
+The shared venv supplies dependencies; `bin/hub.py` is the current checkout's
+implementation. `fmt` owns `index.json`; never edit it by hand or weaken
+schemas. Preserve `CLAUDE.md` companions containing `@AGENTS.md`.
 
 Human feedback issues labelled `backlog-feedback` remain input. Record
 accepted task changes and evidence in Knowledge, then reference the resulting
